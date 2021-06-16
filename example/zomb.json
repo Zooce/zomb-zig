@@ -1,0 +1,38 @@
+{
+    "$schema": "vscode://schemas/color-theme",
+    "name": "Zooce Dark",
+    "type": "Dark",
+    "colors": {
+        "editor.foreground": "MACRO-EXPR",
+        "editor.background": "MACRO-EXPR"
+    },
+    "tokenColors": [
+        {
+            "scope": "punctuation.definition.arguments",
+            "settings": {
+                "foreground": "MACRO-EXPR"
+            }
+        },
+        "MACRO-EXPR",
+        {
+            "scope": "string",
+            "settings": "MACRO-EXPR"
+        },
+        {
+            "scope": "support",
+            "settings": "MACRO-EXPR"
+        }
+    ],
+    "multi-line-string": "hello my friends\n what's up with this crazy\nfile format?\"",
+    "cool": {
+        "ports": [
+            "800",
+            "900"
+        ],
+        "this": "MACRO-EXPR",
+        "wh.at": "MACRO-EXPR",
+        "oh_yea": {
+            "thing": "cool = {\n    ports = [ 800 900 ]\n    this = $\"hi.dude\"\n    what = $m1( 0 $m1( a b ) ).goodbye\n    oh_yea = { thing = \"nope\" }\n}\n$hi = this // hi there!\n$m1(one two) = {\n    hello = %one\n    goodbye = %two\n}"
+        }
+    }
+}
