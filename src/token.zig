@@ -248,14 +248,13 @@ pub const Tokenizer = struct {
                     }
                 },
 
-                // TODO: add transition table comment
                 .QuotedString => switch (self.state_stage) {
                     0 => { // starting quotation mark
                         if (self.advance().? != '"') return error.UnexpectedCommonQuotedStringStage0Byte;
                         self.token.offset = self.buffer_cursor;
                         self.state_stage = 1;
                     },
-                    1 => if (self.consumeToBytes("\\\"")) |target| { // non-escaped bytes or ending quotation mark
+                    1 => if (self.consumeToBytes("\\\"")) |_| { // non-escaped bytes or ending quotation mark
                         switch (self.peek().?) {
                             '"' => {
                                 _ = self.advance();
@@ -313,7 +312,6 @@ pub const Tokenizer = struct {
                     else => return error.UnexpectedMacroXStage,
                 },
 
-                // TODO: add transition table comment
                 .BareString => {
                     if (self.consumeToBytes(delimiters) != null) {
                         self.tokenComplete();
@@ -352,7 +350,7 @@ pub const Tokenizer = struct {
                         self.tokenMaybeComplete();
                         self.state_stage = 2;
                     },
-                    2 => if (self.consumeToBytes("\r\n")) |target| { // all bytes to (and including) end of line
+                    2 => if (self.consumeToBytes("\r\n")) |_| { // all bytes to (and including) end of line
                         switch (self.advance().?) { // don't consume the newline yet
                             '\r' => {
                                 self.crlf = true;

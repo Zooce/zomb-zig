@@ -44,5 +44,6 @@ pub const StringReader = struct {
 
     pub fn close(self: *Self) void {
         // Nothing to do here.
+        _ = self;
     }
 };
