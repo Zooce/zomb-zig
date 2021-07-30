@@ -73,12 +73,11 @@ fn zombValueToJson(value_: zomb.ZombType, jw_: anytype) anyerror!void {
             try jw_.endArray();
         },
         .String => |slice| {
-            try jw_.emitString(slice);
+            try jw_.emitString(slice.items);
         },
         .Empty => {
             // TODO: this will be whatever the macro-expr evaluates to
             try jw_.emitString("MACRO-EXPR");
         },
-        else => return error.UnknownType,
     }
 }

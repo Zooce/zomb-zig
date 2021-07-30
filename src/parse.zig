@@ -10,9 +10,13 @@ pub const ZombTypeArray = std.ArrayList(ZombType);
 pub const ZombType = union(enum) {
     Object: ZombTypeMap,
     Array: ZombTypeArray,
-    String: []const u8,
-    Parameter: []const u8, // macros only
+    String: std.ArrayList(u8),
     Empty: void, // just temporary
+};
+
+const ZombStackType = union(enum) {
+    Element: ZombType,
+    Key: []const u8,
 };
 
 
@@ -152,30 +156,6 @@ pub const Parser = struct {
         Value,
     };
 
-    const State2 = enum {
-        Decl,
-
-        KvPair_Stage0,
-        KvPair_Stage1,
-
-        Object_Stage0,
-        Object_Stage1,
-
-        Array_Stage0,
-        Array_Stage1,
-
-        Value_Stage0,
-        Value_Stage1,
-    };
-
-    const ValType = enum {
-        None,
-        Unknown,
-        String,
-        Object,
-        Array,
-    };
-
     allocator: *std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
 
@@ -195,10 +175,7 @@ pub const Parser = struct {
     val_type_stack: StackBits = 0,
     val_type_stack_size: u8 = 0,
 
-    zomb_type_stack: ZombTypeArray,
-    string_val: std.ArrayList(u8),
-
-    val_type: ValType = ValType.None,
+    zomb_type_stack: std.ArrayList(ZombStackType),
 
     macro_ptr: ?*ZombMacro = null,
     zomb_macro_type_stack: std.ArrayList(ZombMacroStackType),
@@ -215,8 +192,7 @@ pub const Parser = struct {
             .arena = arena,
             .input = input_,
             .tokenizer = Tokenizer.init(input_),
-            .zomb_type_stack = ZombTypeArray.init(&arena.allocator),
-            .string_val = std.ArrayList(u8).init(&arena.allocator),
+            .zomb_type_stack = std.ArrayList(ZombStackType).init(&arena.allocator),
             .zomb_macro_type_stack = std.ArrayList(ZombMacroStackType).init(&arena.allocator),
             .macro_map = std.StringArrayHashMap(ZombMacro).init(&arena.allocator),
             .macro_expr_stack = std.ArrayList(ZombMacroExpr).init(&arena.allocator),
@@ -232,7 +208,7 @@ pub const Parser = struct {
         errdefer out_arena.deinit();
 
         // our stack has an implicit top-level object
-        try self.zomb_type_stack.append(ZombType{ .Object = ZombTypeMap.init(&out_arena.allocator) });
+        try self.zomb_type_stack.append(.{ .Element = .{ .Object = ZombTypeMap.init(&out_arena.allocator) } });
 
         var token = try self.tokenizer.next(); // TODO: consider returning null when at_end_of_buffer == true
         parseloop: while (!self.tokenizer.at_end_of_buffer) {
@@ -315,11 +291,11 @@ pub const Parser = struct {
                 .KvPair => switch (self.state_stage) {
                     0 => switch (token.token_type) { // key
                         .String => {
-                            const key = try token.slice(self.input);
+                            const key = try token.slice(self.input); // TODO: shouldn't we allocate the memory for this slice with the out_arena?
                             if (self.macro_ptr) |_| {
                                 try self.zomb_macro_type_stack.append(.{ .Key = key });
                             } else if (!self.stateStackHasMacros()) {
-                                try self.zomb_type_stack.append(.{ .String = key });
+                                try self.zomb_type_stack.append(.{ .Key = key });
                             }
                             self.state_stage = 1;
                         },
@@ -344,12 +320,9 @@ pub const Parser = struct {
                     0 => switch (token.token_type) {
                         .OpenCurly => {
                             if (self.macro_ptr) |_| {
-                                try self.zomb_macro_type_stack.append(.{ .List =
-                                    .{ .ObjectList = std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator) }
-                                });
                                 try self.zomb_macro_type_stack.append(.{ .Object = .{ .Object = ZombMacroTypeMap.init(&self.arena.allocator) } });
                             } else if (!self.stateStackHasMacros()) {
-                                try self.zomb_type_stack.append(.{ .Object = ZombTypeMap.init(&out_arena.allocator) });
+                                try self.zomb_type_stack.append(.{ .Element = .{ .Object = ZombTypeMap.init(&out_arena.allocator) } });
                             }
                             self.state = State.KvPair;
                             self.state_stage = 0;
@@ -396,11 +369,9 @@ pub const Parser = struct {
                     0 => switch (token.token_type) { // open square
                         .OpenSquare => {
                             if (self.macro_ptr) |_| {
-                                // var array_array = .{ .Array = std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator) };
-                                // try array_array.Array.append(.{ .Array = ZombMacroTypeArray.init(&self.arena.allocator) });
-                                // try self.zomb_macro_type_stack.append(array_array);
+                                try self.zomb_macro_type_stack.append(.{ .Array = .{ .Array = ZombMacroTypeArray.init(&self.arena.allocator) } });
                             } else if (!self.stateStackHasMacros()) {
-                                try self.zomb_type_stack.append(.{ .Array = ZombTypeArray.init(&out_arena.allocator) });
+                                try self.zomb_type_stack.append(.{ .Element = .{ .Array = ZombTypeArray.init(&out_arena.allocator) } });
                             }
                             try self.stateStackPush(stack_value);
                         },
@@ -413,7 +384,17 @@ pub const Parser = struct {
                             try self.stackConsumeArrayValue();
                         }
                         switch (token.token_type) {
-                            .CloseSquare => try self.stateStackPop(), // done with this array, consume it in the parent
+                            .CloseSquare => {
+                                if (self.macro_ptr) |_| {
+                                    const array = self.zomb_macro_type_stack.pop().Array;
+                                    if (self.macroStackTop()) |stack_type| {
+                                        try stack_type.List.ArrayList.append(array);
+                                    } else {
+                                        return error.MacroStackEmpty;
+                                    }
+                                }
+                                try self.stateStackPop(); // done with this array, consume it in the parent
+                            },
                             else => try self.stateStackPush(stack_value), // check for another value
                         }
                     },
@@ -424,7 +405,6 @@ pub const Parser = struct {
                 .Value => switch(self.state_stage) {
                     0 => switch(token.token_type) { // value
                         .String => {
-                            // try self.checkValType(ValType.String);
                             const string_slice = try token.slice(self.input);
                             if (self.macro_ptr) |_| {
                                 // top of the stack should be a String
@@ -441,7 +421,7 @@ pub const Parser = struct {
                                         },
                                         else => return error.UnexpectedStringValueMacroStackType,
                                     },
-                                    .Key => {
+                                    .Key, .Array => {
                                         try self.zomb_macro_type_stack.append(.{ .List =
                                             .{ .StringList = std.ArrayList(ZombMacroStringValue).init(&self.arena.allocator) }
                                         });
@@ -450,7 +430,14 @@ pub const Parser = struct {
                                     else => return error.UnexpectedStringValueMacroStackType,
                                 }
                             } else {
-                                try self.string_val.appendSlice(string_slice);
+                                var top = self.zomb_type_stack.items[self.zomb_type_stack.items.len - 1];
+                                switch (top) {
+                                    .Element => |*elem| switch (elem.*) {
+                                        .String => |*str| try str.appendSlice(string_slice),
+                                        else => return error.UnexpectedStackElement,
+                                    },
+                                    .Key => try self.zomb_type_stack.append(.{ .Element = .{ .String = std.ArrayList(u8).init(&out_arena.allocator) } }),
+                                }
                             }
                             self.state_stage = 1;
                         },
@@ -465,7 +452,7 @@ pub const Parser = struct {
                                         .StringList => |*strings| try strings.append(.{ .Parameter = parameter }),
                                         .ParameterList => |*params| try params.append(parameter),
                                     },
-                                    .Key => {
+                                    .Key, .Array => {
                                         try self.zomb_macro_type_stack.append(.{ .List =
                                             .{ .ParameterList = std.ArrayList([]const u8).init(&self.arena.allocator) }
                                         });
@@ -483,12 +470,37 @@ pub const Parser = struct {
                             continue :parseloop; // keep the token
                         },
                         .OpenCurly => {
-                            // try self.checkValType(ValType.Object);
+                            if (self.macro_ptr) |_| {
+                                var top = self.macroStackTop() orelse return error.MacroStackEmpty;
+                                switch (top.*) {
+                                    .List => |list_type| switch (list_type) {
+                                        .ObjectList => {},
+                                        else => return error.UnexpectedMacroStackList,
+                                    },
+                                    .Key, .Array => {
+                                        try self.zomb_macro_type_stack.append(.{ .List =
+                                            .{ .ObjectList = std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator) }
+                                        });
+                                    },
+                                    else => return error.UnexpectedMacroStackTop,
+                                }
+                            }
                             try self.stateStackPush(stack_object);
                             continue :parseloop; // keep the token
                         },
                         .OpenSquare => {
-                            // try self.checkValType(ValType.Array);
+                            if (self.macro_ptr) |_| {
+                                var top = self.macroStackTop() orelse return error.MacroStackEmpty;
+                                switch (top.*) {
+                                    .List => {},
+                                    .Key, .Array => {
+                                        try self.zomb_macro_type_stack.append(.{ .List =
+                                            .{ .ArrayList = std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator) }
+                                        });
+                                    },
+                                    else => return error.UnexpectedMacroStackTop,
+                                }
+                            }
                             try self.stateStackPush(stack_array);
                             continue :parseloop; // keep the token
                         },
@@ -496,13 +508,7 @@ pub const Parser = struct {
                     },
                     1 => switch(token.token_type) { // plus sign OR exit value state
                         .Plus => self.state_stage = 0,
-                        else => {
-                            if (self.val_type == ValType.String) {
-                                try self.zomb_type_stack.append(ZombType{ .String = self.string_val.toOwnedSlice() });
-                            }
-                            self.val_type = ValType.None;
-                            try self.stateStackPop();
-                        },
+                        else => try self.stateStackPop(),
                     },
                     else => return error.UnexpectedValueStage,
                 },
@@ -691,17 +697,8 @@ pub const Parser = struct {
 
         return Zomb{
             .arena = out_arena,
-            .map = self.zomb_type_stack.pop(),
+            .map = self.zomb_type_stack.pop().Element,
         };
-    }
-
-    fn checkValType(self: *Self, val_type_: ValType) !void {
-        if (self.val_type == val_type_) return;
-        switch (self.val_type) {
-            .None => self.val_type = val_type_,
-            .Unknown => {},
-            else => return error.IncompatibleValueTypeEncountered,
-        }
     }
 
     fn macroStackTop(self: Self) ?*ZombMacroStackType {
@@ -716,15 +713,15 @@ pub const Parser = struct {
     // ZombType Consumption Functions
 
     fn stackConsumeKvPair(self: *Self) !void {
-        const val = self.zomb_type_stack.pop();
-        const key = self.zomb_type_stack.pop();
-        var object = &self.zomb_type_stack.items[self.zomb_type_stack.items.len - 1].Object;
-        try object.put(key.String, val);
+        const val = self.zomb_type_stack.pop().Element;
+        const key = self.zomb_type_stack.pop().Key;
+        var object = &self.zomb_type_stack.items[self.zomb_type_stack.items.len - 1].Element.Object;
+        try object.put(key, val);
     }
 
     fn stackConsumeArrayValue(self: *Self) !void {
-        const val = self.zomb_type_stack.pop();
-        var array = &self.zomb_type_stack.items[self.zomb_type_stack.items.len - 1].Array;
+        const val = self.zomb_type_stack.pop().Element;
+        var array = &self.zomb_type_stack.items[self.zomb_type_stack.items.len - 1].Element.Array;
         try array.append(val);
     }
 
@@ -740,11 +737,11 @@ pub const Parser = struct {
     }
 
     fn stackConsumeMacroArrayValue(self: *Self) !void {
-        _ = self;
-        // const val = self.zomb_macro_type_stack.pop();
-        // var arr_arr = &self.zomb_macro_type_stack.items[self.zomb_macro_type_stack.items.len - 1].Array;
-        // var arr = &arr_arr.items[arr_arr.items.len - 1].Array;
-        // try arr.append(val);
+        const val = self.zomb_macro_type_stack.pop();
+        if (self.macroStackTop()) |stack_type| {
+            var array = stack_type.Array;
+            try array.Array.append(val.List);
+        }
     }
 
     //======================
