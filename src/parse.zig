@@ -51,6 +51,7 @@ const ZombMacroStackType = union(enum) {
     Object: ZombMacroObjectValue,
     Array: ZombMacroArrayValue,
     Key: []const u8,
+    Empty: void, // the starting element -- for parsing
 };
 
 pub fn copyZombType(alloc_: *std.mem.Allocator, master_: ZombType) !ZombType {
@@ -210,6 +211,9 @@ pub const Parser = struct {
         // our stack has an implicit top-level object
         try self.zomb_type_stack.append(.{ .Element = .{ .Object = ZombTypeMap.init(&out_arena.allocator) } });
 
+        // our macro stack always has an empty first element
+        try self.zomb_macro_type_stack.append(ZombMacroStackType.Empty);
+
         var token = try self.tokenizer.next(); // TODO: consider returning null when at_end_of_buffer == true
         parseloop: while (!self.tokenizer.at_end_of_buffer) {
             // NOTE: we deliberately do not get the next token at the start of this loop in cases where we want to keep
@@ -218,13 +222,13 @@ pub const Parser = struct {
             // ===--- for prototyping only ---===
             std.log.info(
                 \\
-                \\State      : {} (stage = {})
-                \\Bit Stack  : 0x{X:0>32} (size = {})
-                \\Type       : {} (line = {})
-                \\Token      : {s}
-                \\Stack Len  : {}
-                \\Macro Decl : {}
-                \\Macro Bits : {}
+                \\State       : {} (stage = {})
+                \\State Stack : 0x{X:0>32} (size = {})
+                \\Type        : {} (line = {})
+                \\Token       : {s}
+                \\Stack Len   : {}
+                \\Macro Decl  : {}
+                \\Macro Bits  : {}
                 \\
                 // \\Macro Keys: {s}
                 \\
@@ -257,23 +261,28 @@ pub const Parser = struct {
                 //         String           >> KvPair
                 //         else             >> error
                 .Decl => {
-                    if (self.macro_ptr) |_| {
-                        try self.stackConsumeMacroKvPair();
-                    } else if (self.zomb_type_stack.items.len == 3) { // consume the kvpair we just parsed
-                        if (!self.macro_decl) {
-                            try self.stackConsumeKvPair();
+                    if (self.macro_ptr) |macro_ptr| {
+                        macro_ptr.*.value = self.zomb_macro_type_stack.pop().List;
+                        if (macro_ptr.*.params) |params| {
+                            var iter = params.iterator();
+                            while (iter.next()) |entry| {
+                                if (entry.value_ptr.* == 0) {
+                                    // TODO: log which parameter was not used
+                                    return error.UnusedMacroParameter;
+                                }
+                            }
                         }
+                    } else if (self.zomb_type_stack.items.len == 3) { // consume the kvpair we just parsed
+                        try self.stackConsumeKvPair();
                     }
                     self.state_stage = 0;
+                    self.macro_ptr = null;
                     switch (token.token_type) {
                         .MacroKey => {
-                            self.macro_decl = true;
                             self.state = State.MacroDecl;
                             continue :parseloop; // keep the token
                         },
                         .String => {
-                            self.macro_ptr = null;
-                            self.macro_decl = false;
                             self.state = State.KvPair;
                             continue :parseloop; // keep the token
                         },
@@ -291,11 +300,11 @@ pub const Parser = struct {
                 .KvPair => switch (self.state_stage) {
                     0 => switch (token.token_type) { // key
                         .String => {
-                            const key = try token.slice(self.input); // TODO: shouldn't we allocate the memory for this slice with the out_arena?
+                            const key = .{ .Key = try token.slice(self.input) };
                             if (self.macro_ptr) |_| {
-                                try self.zomb_macro_type_stack.append(.{ .Key = key });
+                                try self.zomb_macro_type_stack.append(key);
                             } else if (!self.stateStackHasMacros()) {
-                                try self.zomb_type_stack.append(.{ .Key = key });
+                                try self.zomb_type_stack.append(key);
                             }
                             self.state_stage = 1;
                         },
@@ -421,7 +430,7 @@ pub const Parser = struct {
                                         },
                                         else => return error.UnexpectedStringValueMacroStackType,
                                     },
-                                    .Key, .Array => {
+                                    .Key, .Array, .Empty => {
                                         try self.zomb_macro_type_stack.append(.{ .List =
                                             .{ .StringList = std.ArrayList(ZombMacroStringValue).init(&self.arena.allocator) }
                                         });
@@ -442,8 +451,15 @@ pub const Parser = struct {
                             self.state_stage = 1;
                         },
                         .MacroParamKey => {
-                            if (self.macro_ptr) |_| {
+                            if (self.macro_ptr) |macro_ptr| {
                                 const parameter = try token.slice(self.input);
+                                if (macro_ptr.*.params) |params| {
+                                    if (params.getPtr(parameter)) |p| {
+                                        p.* += 1;
+                                    } else {
+                                        return error.InvalidParameterUse;
+                                    }
+                                }
                                 var top = self.macroStackTop() orelse return error.MacroStackEmpty;
                                 switch (top.*) {
                                     .List => |*list| switch (list.*) { // TODO: this might need some work -- I think there's a bug here...
@@ -452,7 +468,7 @@ pub const Parser = struct {
                                         .StringList => |*strings| try strings.append(.{ .Parameter = parameter }),
                                         .ParameterList => |*params| try params.append(parameter),
                                     },
-                                    .Key, .Array => {
+                                    .Key, .Array, .Empty => {
                                         try self.zomb_macro_type_stack.append(.{ .List =
                                             .{ .ParameterList = std.ArrayList([]const u8).init(&self.arena.allocator) }
                                         });
@@ -475,9 +491,12 @@ pub const Parser = struct {
                                 switch (top.*) {
                                     .List => |list_type| switch (list_type) {
                                         .ObjectList => {},
+                                        .ParameterList => {
+                                            // TODO: convert to ObjectList
+                                        },
                                         else => return error.UnexpectedMacroStackList,
                                     },
-                                    .Key, .Array => {
+                                    .Key, .Array, .Empty => {
                                         try self.zomb_macro_type_stack.append(.{ .List =
                                             .{ .ObjectList = std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator) }
                                         });
@@ -492,8 +511,14 @@ pub const Parser = struct {
                             if (self.macro_ptr) |_| {
                                 var top = self.macroStackTop() orelse return error.MacroStackEmpty;
                                 switch (top.*) {
-                                    .List => {},
-                                    .Key, .Array => {
+                                    .List => |list_type| switch (list_type) {
+                                        .ArrayList => {},
+                                        .ParameterList => {
+                                            // TODO: convert to ObjectList
+                                        },
+                                        else => return error.UnexpectedMacroStackList,
+                                    },
+                                    .Key, .Array, .Empty => {
                                         try self.zomb_macro_type_stack.append(.{ .List =
                                             .{ .ArrayList = std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator) }
                                         });
