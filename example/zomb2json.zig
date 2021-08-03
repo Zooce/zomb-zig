@@ -34,7 +34,7 @@ pub fn main() anyerror!void {
     var zomb_parser = zomb.Parser.init(input_file_contents.items, std.heap.page_allocator);
     defer zomb_parser.deinit();
 
-    const z = try zomb_parser.parse();
+    const z = try zomb_parser.parse(std.heap.page_allocator);
     defer z.deinit();
 
     var output_file = try std.fs.cwd().createFile("example/zomb.json", .{});

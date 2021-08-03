@@ -61,6 +61,7 @@ const SpecialToken = enum(u8) {
     Newline,
     Comment,
     String,
+    RawString,
     MacroKey,
     MacroParamKey,
     MacroAccessor,
@@ -184,7 +185,10 @@ pub const Tokenizer = struct {
     /// Get the next token. Cases where a valid token is not found indicate that either EOF has been
     /// reached or the current input buffer (when streaming the input) needs to be refilled. If an
     /// error is encountered, the error is returned.
-    pub fn next(self: *Self) !Token {
+    pub fn next(self: *Self) !?Token {
+        if (self.at_end_of_buffer) {
+            return null;
+        }
         while (!self.at_end_of_buffer) {
             // std.log.err(
             //     \\
@@ -338,7 +342,7 @@ pub const Tokenizer = struct {
                             .offset = self.buffer_cursor,
                             .line = self.current_line,
                             .start_buffer = self.buffer_index,
-                            .token_type = TokenType.String,
+                            .token_type = TokenType.RawString,
                         };
 
                         //    ex -> key = \\this is the rest of the string<EOF>
@@ -617,7 +621,7 @@ fn expectToken(expected_token_: ExpectedToken, token_: Token, orig_str_: []const
 fn doTokenTest(str_: []const u8, expected_tokens_: []const ExpectedToken) !void {
     var tokenizer = Tokenizer.init(str_);
     for (expected_tokens_) |expected_token, i| {
-        const actual_token = try tokenizer.next();
+        const actual_token = (try tokenizer.next()) orelse return error.NullToken;
         errdefer {
             std.debug.print(
                 \\
@@ -702,9 +706,9 @@ test "basic raw string" {
         \\
     ;
     const expected_tokens = [_]ExpectedToken{
-        ExpectedToken{ .str = "line one\n", .line = 1, .token_type = TokenType.String },
-        ExpectedToken{ .str = "line two\n", .line = 2, .token_type = TokenType.String },
-        ExpectedToken{ .str = "line three", .line = 3, .token_type = TokenType.String },
+        ExpectedToken{ .str = "line one\n", .line = 1, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = "line two\n", .line = 2, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = "line three", .line = 3, .token_type = TokenType.RawString },
     };
     try doTokenTest(str, &expected_tokens);
 }
@@ -717,9 +721,9 @@ test "raw string with leading space" {
         \\
     ;
     const expected_tokens = [_]ExpectedToken{
-        ExpectedToken{ .str = "line one\n", .line = 1, .token_type = TokenType.String },
-        ExpectedToken{ .str = "line two\n", .line = 2, .token_type = TokenType.String },
-        ExpectedToken{ .str = "line three", .line = 3, .token_type = TokenType.String },
+        ExpectedToken{ .str = "line one\n", .line = 1, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = "line two\n", .line = 2, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = "line three", .line = 3, .token_type = TokenType.RawString },
     };
     try doTokenTest(str, &expected_tokens);
 }
@@ -731,9 +735,9 @@ test "raw string at EOF" {
         \\\\line three
     ;
     const expected_tokens = [_]ExpectedToken{
-        ExpectedToken{ .str = "line one\n", .line = 1, .token_type = TokenType.String },
-        ExpectedToken{ .str = "line two\n", .line = 2, .token_type = TokenType.String },
-        ExpectedToken{ .str = "line three", .line = 3, .token_type = TokenType.String },
+        ExpectedToken{ .str = "line one\n", .line = 1, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = "line two\n", .line = 2, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = "line three", .line = 3, .token_type = TokenType.RawString },
     };
     try doTokenTest(str, &expected_tokens);
 }
@@ -748,9 +752,9 @@ test "string-raw-string kv-pair" {
     const expected_tokens = [_]ExpectedToken{
         ExpectedToken{ .str = "key", .line = 1, .token_type = TokenType.String },
         ExpectedToken{ .str = "=", .line = 1, .token_type = TokenType.Equals },
-        ExpectedToken{ .str = "first line\n", .line = 1, .token_type = TokenType.String },
-        ExpectedToken{ .str = " second line\n", .line = 2, .token_type = TokenType.String },
-        ExpectedToken{ .str = "   third line", .line = 3, .token_type = TokenType.String },
+        ExpectedToken{ .str = "first line\n", .line = 1, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = " second line\n", .line = 2, .token_type = TokenType.RawString },
+        ExpectedToken{ .str = "   third line", .line = 3, .token_type = TokenType.RawString },
         ExpectedToken{ .str = "123", .line = 4, .token_type = TokenType.String },
         ExpectedToken{ .str = "=", .line = 4, .token_type = TokenType.Equals },
         ExpectedToken{ .str = "456", .line = 4, .token_type = TokenType.String },
