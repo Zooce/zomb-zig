@@ -237,6 +237,16 @@ pub const Parser = struct {
                     // self.macros.keys(),
                 }
             );
+            // for (self.zomb_type_stack.items) |item| switch (item) {
+            //     .Element => |elem| switch (elem) {
+            //         .Object => std.log.err("Object", .{}),
+            //         .Array => std.log.err("Array", .{}),
+            //         .String => |str| std.log.err("String ({s})", .{str.items}),
+            //         .Empty => std.log.err("Empty", .{}),
+            //     },
+            //     .Key => |key| std.log.err("Key ({s})", .{key}),
+            // };
+            // std.log.err("\n\n", .{});
             // ===----------------------------===
 
             // comments are ignored everywhere - make sure to get the next token as well
@@ -539,7 +549,10 @@ pub const Parser = struct {
                             self.state_stage = 0;
                             continue :parseloop; // keep the token
                         },
-                        else => try self.stateStackPop(),
+                        else => {
+                            try self.stateStackPop();
+                            continue :parseloop; // keep the token
+                        },
                     },
                     else => return error.UnexpectedValueStage,
                 },
@@ -818,10 +831,7 @@ pub const Parser = struct {
                 self.state = State.MacroExprParams;
                 self.state_stage = 2;
             },
-            stack_value => {
-                self.state = State.Value;
-                self.state_stage = 0;
-            },
+            stack_value => self.state = State.Value,
             else => return error.UnexpectedStackElement,
         }
     }
@@ -849,6 +859,20 @@ const testing = std.testing;
 
 const StringReader = @import("string_reader.zig").StringReader;
 const StringParser = Parser(StringReader, 32);
+
+fn parseTestInput(input_: []const u8) !Zomb {
+    var parser = Parser.init(input_, testing.allocator);
+    defer parser.deinit();
+
+    return try parser.parse(testing.allocator);
+}
+
+fn doZombTypeStringTest(expected_: []const u8, actual_: ZombType) !void {
+    switch (actual_) {
+        .String => |str| try testing.expectEqualStrings(expected_, str.items),
+        else => return error.UnexpectedValue,
+    }
+}
 
 test "general stack logic" {
     var stack: u128 = 0;
@@ -882,71 +906,110 @@ test "general stack logic" {
 
 test "kvpair - bare string value" {
     const input = "key = value";
-    var zparser = Parser.init(input, testing.allocator);
-    defer zparser.deinit();
-
-    const z = try zparser.parse(testing.allocator);
+    const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key");
-    try testing.expect(entry != null);
-    try testing.expectEqualStrings("key", entry.?.key_ptr.*);
-    switch (entry.?.value_ptr.*) {
-        .String => |str| try testing.expectEqualStrings("value", str.items),
-        else => return error.UnexpectedValue,
-    }
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
 test "kvpair - quoted string value" {
     const input = "key = \"value\"";
-    var zparser = Parser.init(input, testing.allocator);
-    defer zparser.deinit();
+    var parser = Parser.init(input, testing.allocator);
+    defer parser.deinit();
 
-    const z = try zparser.parse(testing.allocator);
+    const z = try parser.parse(testing.allocator);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key");
-    try testing.expect(entry != null);
-    try testing.expectEqualStrings("key", entry.?.key_ptr.*);
-    switch (entry.?.value_ptr.*) {
-        .String => |str| try testing.expectEqualStrings("value", str.items),
-        else => return error.UnexpectedValue,
-    }
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    try doZombTypeStringTest("value", entry.value_ptr.*);
 }
+
+// TODO: test empty quoted string -- should be an error
 
 test "kvpair - one line raw string value" {
     const input = "key = \\\\value";
-    var zparser = Parser.init(input, testing.allocator);
-    defer zparser.deinit();
-
-    const z = try zparser.parse(testing.allocator);
+    const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key");
-    try testing.expect(entry != null);
-    try testing.expectEqualStrings("key", entry.?.key_ptr.*);
-    switch (entry.?.value_ptr.*) {
-        .String => |str| try testing.expectEqualStrings("value", str.items),
-        else => return error.UnexpectedValue,
-    }
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    try doZombTypeStringTest("value", entry.value_ptr.*);
 }
+
+// TODO: test empty raw string - should be an error (maybe this is a token error?)
 
 test "kvpair - two line raw string value" {
     const input =
         \\key = \\one
         \\      \\two
         ;
-    var zparser = Parser.init(input, testing.allocator);
-    defer zparser.deinit();
-
-    const z = try zparser.parse(testing.allocator);
+    const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key");
-    try testing.expect(entry != null);
-    try testing.expectEqualStrings("key", entry.?.key_ptr.*);
-    switch (entry.?.value_ptr.*) {
-        .String => |str| try testing.expectEqualStrings("one\ntwo", str.items),
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    try doZombTypeStringTest("one\ntwo", entry.value_ptr.*);
+}
+
+// TODO: test empty object - should be an error
+
+test "kvpair - basic object value" {
+    const input =
+        \\key = {
+        \\    a = hello
+        \\    b = goodbye
+        \\}
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    switch (entry.value_ptr.*) {
+        .Object => |obj| {
+            const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
+            try testing.expectEqualStrings("a", entry_a.key_ptr.*);
+            try doZombTypeStringTest("hello", entry_a.value_ptr.*);
+
+            const entry_b = obj.getEntry("b") orelse return error.KeyNotFound;
+            try testing.expectEqualStrings("b", entry_b.key_ptr.*);
+            try doZombTypeStringTest("goodbye", entry_b.value_ptr.*);
+        },
         else => return error.UnexpectedValue,
     }
 }
+
+test "kvpair - nested object value" {
+    const input =
+        \\key = {
+        \\    a = {
+        \\        b = value
+        \\    }
+        \\}
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    switch (entry.value_ptr.*) {
+        .Object => |obj_a| {
+            const entry_a = obj_a.getEntry("a") orelse return error.KeyNotFound;
+            try testing.expectEqualStrings("a", entry_a.key_ptr.*);
+            switch (entry_a.value_ptr.*) {
+                .Object => |obj_b| {
+                    const entry_b = obj_b.getEntry("b") orelse return error.KeyNotFound;
+                    try testing.expectEqualStrings("b", entry_b.key_ptr.*);
+                    try doZombTypeStringTest("value", entry_b.value_ptr.*);
+                },
+                else => return error.UnexpectedValue,
+            }
+        },
+        else => return error.UnexpectedValue,
+    }
+}
+
+// TODO: test empty array - should be an error
