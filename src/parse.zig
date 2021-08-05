@@ -211,7 +211,7 @@ pub const Parser = struct {
             //       the previous token -- instead, we get the next token at the end of this loop
 
             // ===--- for prototyping only ---===
-            std.log.info(
+            std.log.err(
                 \\
                 \\State       : {} (stage = {})
                 \\State Stack : 0x{X:0>32} (size = {})
@@ -220,9 +220,9 @@ pub const Parser = struct {
                 \\Stack Len   : {}
                 // \\Macro Decl  : {}
                 // \\Macro Bits  : {}
-                \\
+                // \\
                 // \\Macro Keys: {s}
-                \\
+                // \\
                 , .{
                     self.state,
                     self.state_stage,
@@ -237,16 +237,16 @@ pub const Parser = struct {
                     // self.macros.keys(),
                 }
             );
-            // for (self.zomb_type_stack.items) |item| switch (item) {
-            //     .Element => |elem| switch (elem) {
-            //         .Object => std.log.err("Object", .{}),
-            //         .Array => std.log.err("Array", .{}),
-            //         .String => |str| std.log.err("String ({s})", .{str.items}),
-            //         .Empty => std.log.err("Empty", .{}),
-            //     },
-            //     .Key => |key| std.log.err("Key ({s})", .{key}),
-            // };
-            // std.log.err("\n\n", .{});
+            for (self.zomb_type_stack.items) |item| switch (item) {
+                .Element => |elem| switch (elem) {
+                    .Object => std.log.err("Object", .{}),
+                    .Array => |arr| std.log.err("Array (len = {})", .{arr.items.len}),
+                    .String => |str| std.log.err("String ({s})", .{str.items}),
+                    .Empty => std.log.err("Empty", .{}),
+                },
+                .Key => |key| std.log.err("Key ({s})", .{key}),
+            };
+            std.log.err("\n\n", .{});
             // ===----------------------------===
 
             // comments are ignored everywhere - make sure to get the next token as well
@@ -405,7 +405,10 @@ pub const Parser = struct {
                                 }
                                 try self.stateStackPop(); // done with this array, consume it in the parent
                             },
-                            else => try self.stateStackPush(stack_value), // check for another value
+                            else => {
+                                try self.stateStackPush(stack_value); // check for another value
+                                continue :parseloop; // keep the token
+                            },
                         }
                     },
                     else => return error.UnexpectedArrayStage,
@@ -444,6 +447,10 @@ pub const Parser = struct {
                                 switch (top.*) {
                                     .Element => |*elem| switch (elem.*) {
                                         .String => |*str| try str.appendSlice(string_slice),
+                                        .Array => {
+                                            try self.zomb_type_stack.append(.{ .Element = .{ .String = std.ArrayList(u8).init(&out_arena.allocator) } });
+                                            continue :parseloop; // keep the token
+                                        },
                                         else => return error.UnexpectedStackElement,
                                     },
                                     .Key => {
@@ -1013,3 +1020,20 @@ test "kvpair - nested object value" {
 }
 
 // TODO: test empty array - should be an error
+
+test "kvpair - basic array value" {
+    const input = "key = [ a b c ]";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    switch (entry.value_ptr.*) {
+        .Array => |arr| {
+            try doZombTypeStringTest("a", arr.items[0]);
+            try doZombTypeStringTest("b", arr.items[1]);
+            try doZombTypeStringTest("c", arr.items[2]);
+        },
+        else => return error.UnexpectedValue,
+    }
+}
