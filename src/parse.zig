@@ -210,45 +210,6 @@ pub const Parser = struct {
             // NOTE: we deliberately do not get the next token at the start of this loop in cases where we want to keep
             //       the previous token -- instead, we get the next token at the end of this loop
 
-            // ===--- for prototyping only ---===
-            std.log.err(
-                \\
-                \\State       : {} (stage = {})
-                \\State Stack : 0x{X:0>32} (size = {})
-                \\Type        : {} (line = {})
-                \\Token       : {s}
-                \\Stack Len   : {}
-                // \\Macro Decl  : {}
-                // \\Macro Bits  : {}
-                // \\
-                // \\Macro Keys: {s}
-                // \\
-                , .{
-                    self.state,
-                    self.state_stage,
-                    self.stack,
-                    self.stack_size,
-                    token.token_type,
-                    token.line,
-                    token.slice(self.input),
-                    self.zomb_type_stack.items.len,
-                    // self.macro_decl,
-                    // self.stateStackHasMacros(),
-                    // self.macros.keys(),
-                }
-            );
-            for (self.zomb_type_stack.items) |item| switch (item) {
-                .Element => |elem| switch (elem) {
-                    .Object => std.log.err("Object", .{}),
-                    .Array => |arr| std.log.err("Array (len = {})", .{arr.items.len}),
-                    .String => |str| std.log.err("String ({s})", .{str.items}),
-                    .Empty => std.log.err("Empty", .{}),
-                },
-                .Key => |key| std.log.err("Key ({s})", .{key}),
-            };
-            std.log.err("\n\n", .{});
-            // ===----------------------------===
-
             // comments are ignored everywhere - make sure to get the next token as well
             if (token.token_type == TokenType.Comment) {
                 next_token = try self.tokenizer.next();
@@ -911,7 +872,7 @@ test "general stack logic" {
     try testing.expectEqual(@as(u128, 0x0000_0000_0000_0000_0000_0000_0000_0000), stack);
 }
 
-test "kvpair - bare string value" {
+test "bare string value" {
     const input = "key = value";
     const z = try parseTestInput(input);
     defer z.deinit();
@@ -921,7 +882,7 @@ test "kvpair - bare string value" {
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
-test "kvpair - quoted string value" {
+test "quoted string value" {
     const input = "key = \"value\"";
     var parser = Parser.init(input, testing.allocator);
     defer parser.deinit();
@@ -936,7 +897,7 @@ test "kvpair - quoted string value" {
 
 // TODO: test empty quoted string -- should be an error
 
-test "kvpair - one line raw string value" {
+test "one line raw string value" {
     const input = "key = \\\\value";
     const z = try parseTestInput(input);
     defer z.deinit();
@@ -948,7 +909,7 @@ test "kvpair - one line raw string value" {
 
 // TODO: test empty raw string - should be an error (maybe this is a token error?)
 
-test "kvpair - two line raw string value" {
+test "two line raw string value" {
     const input =
         \\key = \\one
         \\      \\two
@@ -963,7 +924,7 @@ test "kvpair - two line raw string value" {
 
 // TODO: test empty object - should be an error
 
-test "kvpair - basic object value" {
+test "basic object value" {
     const input =
         \\key = {
         \\    a = hello
@@ -989,7 +950,7 @@ test "kvpair - basic object value" {
     }
 }
 
-test "kvpair - nested object value" {
+test "nested object value" {
     const input =
         \\key = {
         \\    a = {
@@ -1021,7 +982,7 @@ test "kvpair - nested object value" {
 
 // TODO: test empty array - should be an error
 
-test "kvpair - basic array value" {
+test "basic array value" {
     const input = "key = [ a b c ]";
     const z = try parseTestInput(input);
     defer z.deinit();
@@ -1030,9 +991,38 @@ test "kvpair - basic array value" {
     try testing.expectEqualStrings("key", entry.key_ptr.*);
     switch (entry.value_ptr.*) {
         .Array => |arr| {
+            try testing.expectEqual(@as(usize, 3), arr.items.len);
             try doZombTypeStringTest("a", arr.items[0]);
             try doZombTypeStringTest("b", arr.items[1]);
             try doZombTypeStringTest("c", arr.items[2]);
+        },
+        else => return error.UnexpectedValue,
+    }
+}
+
+test "nested array value" {
+    const input =
+        \\key = [
+        \\    [ a b c ]
+        \\]
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try testing.expectEqualStrings("key", entry.key_ptr.*);
+    switch (entry.value_ptr.*) {
+        .Array => |arr| {
+            try testing.expectEqual(@as(usize, 1), arr.items.len);
+            switch (arr.items[0]) {
+                .Array => |arr_inner| {
+                    try testing.expectEqual(@as(usize, 3), arr_inner.items.len);
+                    try doZombTypeStringTest("a", arr_inner.items[0]);
+                    try doZombTypeStringTest("b", arr_inner.items[1]);
+                    try doZombTypeStringTest("c", arr_inner.items[2]);
+                },
+                else => return error.UnexpectedValue,
+            }
         },
         else => return error.UnexpectedValue,
     }
