@@ -4,6 +4,8 @@ const Tokenizer = @import("token.zig").Tokenizer;
 const TokenType = @import("token.zig").TokenType;
 const Token = @import("token.zig").Token;
 
+const DEBUG = false;
+
 pub const ZombTypeMap = std.StringArrayHashMap(ZombType);
 pub const ZombTypeArray = std.ArrayList(ZombType);
 
@@ -18,7 +20,6 @@ const ZombStackType = union(enum) {
     Element: ZombType,
     Key: []const u8,
 };
-
 
 const ZombMacroTypeMap = std.StringArrayHashMap(ZombMacroType);
 const ZombMacroTypeArray = std.ArrayList(ZombMacroType);
@@ -53,42 +54,6 @@ const ZombMacroStackType = union(enum) {
     Key: []const u8,
     Empty: void, // the starting element -- for parsing
 };
-
-pub fn copyZombType(alloc_: *std.mem.Allocator, master_: ZombType) !ZombType {
-    var copy: ZombType = undefined;
-    switch (master_) {
-        .Object => |hash_map| {
-            copy = ZombType{ .Object = ZombTypeMap.init(alloc_) };
-            var iter = hash_map.iterator();
-            while (iter.next()) |entry| {
-                const key = entry.key_ptr.*;
-                const val = entry.value_ptr.*;
-                const val_copy = copyZombType(alloc_, val) catch |err| {
-                    copy.deinit();
-                    return err;
-                };
-                try copy.put(key, val_copy);
-            }
-        },
-        .Array => |array| {
-            copy = ZombType{ .Array = ZombTypeArray.init(alloc_) };
-            for (array.items) |val| {
-                const val_copy = copyZombType(alloc_, val) catch |err| {
-                    copy.deinit();
-                    return err;
-                };
-                try copy.append(val_copy);
-            }
-        },
-        .String => |string| {
-            copy = ZombType{ .String = string };
-        },
-        // .MacroExpr => |id| {
-        //     copy = ZombType{ .MacroExpr = id };
-        // },
-    }
-    return copy;
-}
 
 pub const ZombMacroExpr = struct {
     pub const Accessor = union(enum) {
@@ -191,24 +156,24 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Self, allocator_: *std.mem.Allocator) !Zomb {
+        // initialize some temporary memory we need for parsing
         self.zomb_type_stack = std.ArrayList(ZombStackType).init(&self.arena.allocator);
         self.zomb_macro_type_stack = std.ArrayList(ZombMacroStackType).init(&self.arena.allocator);
         self.macro_map = std.StringArrayHashMap(ZombMacro).init(&self.arena.allocator);
         self.macro_expr_stack = std.ArrayList(ZombMacroExpr).init(&self.arena.allocator);
 
+        // this arena will be given to the caller so they can clean up the memory we allocate for the ZOMB types
         var out_arena = std.heap.ArenaAllocator.init(allocator_);
         errdefer out_arena.deinit();
 
-        // our stack has an implicit top-level object
+        // add the implicit top-level object to our type stack
         try self.zomb_type_stack.append(.{ .Element = .{ .Object = ZombTypeMap.init(&out_arena.allocator) } });
 
         // our macro stack always has an empty first element
         try self.zomb_macro_type_stack.append(ZombMacroStackType.Empty);
 
-        var next_token = try self.tokenizer.next(); // TODO: consider returning null when at_end_of_buffer == true
+        var next_token = try self.tokenizer.next();
         parseloop: while (next_token) |token| {
-            // NOTE: we deliberately do not get the next token at the start of this loop in cases where we want to keep
-            //       the previous token -- instead, we get the next token at the end of this loop
 
             // comments are ignored everywhere - make sure to get the next token as well
             if (token.token_type == TokenType.Comment) {
@@ -291,9 +256,13 @@ pub const Parser = struct {
                     0 => switch (token.token_type) {
                         .OpenCurly => {
                             if (self.macro_ptr) |_| {
-                                try self.zomb_macro_type_stack.append(.{ .Object = .{ .Object = ZombMacroTypeMap.init(&self.arena.allocator) } });
+                                try self.zomb_macro_type_stack.append(.{ .Object =
+                                    .{ .Object = ZombMacroTypeMap.init(&self.arena.allocator) }
+                                });
                             } else {
-                                try self.zomb_type_stack.append(.{ .Element = .{ .Object = ZombTypeMap.init(&out_arena.allocator) } });
+                                try self.zomb_type_stack.append(.{ .Element =
+                                    .{ .Object = ZombTypeMap.init(&out_arena.allocator) }
+                                });
                             }
                             self.state = State.KvPair;
                             self.state_stage = 0;
@@ -340,9 +309,13 @@ pub const Parser = struct {
                     0 => switch (token.token_type) { // open square
                         .OpenSquare => {
                             if (self.macro_ptr) |_| {
-                                try self.zomb_macro_type_stack.append(.{ .Array = .{ .Array = ZombMacroTypeArray.init(&self.arena.allocator) } });
+                                try self.zomb_macro_type_stack.append(.{ .Array =
+                                    .{ .Array = ZombMacroTypeArray.init(&self.arena.allocator) }
+                                });
                             } else {
-                                try self.zomb_type_stack.append(.{ .Element = .{ .Array = ZombTypeArray.init(&out_arena.allocator) } });
+                                try self.zomb_type_stack.append(.{ .Element =
+                                    .{ .Array = ZombTypeArray.init(&out_arena.allocator) }
+                                });
                             }
                             try self.stateStackPush(stack_value);
                         },
@@ -375,7 +348,9 @@ pub const Parser = struct {
                     else => return error.UnexpectedArrayStage,
                 },
 
-                // TODO: add state transition table
+                // this is a special state where we're finally parsing actual values - we do have transistions here, but
+                // there are some relatively-complicated scenarios for them, so a state transition table doesn't really
+                // do us any good
                 .Value => switch(self.state_stage) {
                     0 => switch(token.token_type) { // value
                         .String, .RawString => {
@@ -409,13 +384,17 @@ pub const Parser = struct {
                                     .Element => |*elem| switch (elem.*) {
                                         .String => |*str| try str.appendSlice(string_slice),
                                         .Array => {
-                                            try self.zomb_type_stack.append(.{ .Element = .{ .String = std.ArrayList(u8).init(&out_arena.allocator) } });
+                                            try self.zomb_type_stack.append(.{ .Element =
+                                                .{ .String = std.ArrayList(u8).init(&out_arena.allocator) }
+                                            });
                                             continue :parseloop; // keep the token
                                         },
                                         else => return error.UnexpectedStackElement,
                                     },
                                     .Key => {
-                                        try self.zomb_type_stack.append(.{ .Element = .{ .String = std.ArrayList(u8).init(&out_arena.allocator) } });
+                                        try self.zomb_type_stack.append(.{ .Element =
+                                            .{ .String = std.ArrayList(u8).init(&out_arena.allocator) }
+                                        });
                                         continue :parseloop; // keep the token
                                     },
                                 }
@@ -464,7 +443,9 @@ pub const Parser = struct {
                                     .List => |list_type| switch (list_type) {
                                         .ObjectList => {},
                                         .ParameterList => |params| {
-                                            var object_list = .{ .ObjectList = std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator) };
+                                            var object_list = .{ .ObjectList =
+                                                std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator)
+                                            };
                                             for (params.items) |p| try object_list.ObjectList.append(.{ .Parameter = p });
                                             var param_list = self.zomb_macro_type_stack.pop();
                                             param_list.List.ParameterList.deinit();
@@ -490,7 +471,9 @@ pub const Parser = struct {
                                     .List => |list_type| switch (list_type) {
                                         .ArrayList => {},
                                         .ParameterList => |params| {
-                                            var array_list = .{ .ArrayList = std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator) };
+                                            var array_list = .{ .ArrayList =
+                                                std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator)
+                                            };
                                             for (params.items) |p| try array_list.ArrayList.append(.{ .Parameter = p });
                                             var param_list = self.zomb_macro_type_stack.pop();
                                             param_list.List.ParameterList.deinit();
