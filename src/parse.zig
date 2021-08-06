@@ -861,7 +861,6 @@ test "bare string value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
@@ -874,7 +873,6 @@ test "quoted string value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
@@ -886,11 +884,10 @@ test "one line raw string value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
-// TODO: test empty raw string - should be an error (maybe this is a token error?)
+// TODO: test empty raw string - should be an error
 
 test "two line raw string value" {
     const input =
@@ -901,8 +898,76 @@ test "two line raw string value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     try doZombTypeStringTest("one\ntwo", entry.value_ptr.*);
+}
+
+test "raw string value with empty newline in the middle" {
+    const input =
+        \\key = \\one
+        \\      \\
+        \\      \\two
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("one\n\ntwo", entry.value_ptr.*);
+}
+
+test "bare string concatenation" {
+    const input = "key = one + two + three";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("onetwothree", entry.value_ptr.*);
+}
+
+test "quoted string concatenation" {
+    const input =
+        \\key = "one " + "two " + "three"
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("one two three", entry.value_ptr.*);
+}
+
+test "raw string concatenation" {
+    const input =
+        \\key = \\part one
+        \\      \\
+        \\    + \\part two
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("part one\npart two", entry.value_ptr.*);
+}
+
+test "general string concatenation" {
+    const input =
+        \\key = bare_string + "quoted string" + \\raw
+        \\                                      \\string
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("bare_stringquoted stringraw\nstring", entry.value_ptr.*);
+}
+
+test "quoted key" {
+    const input =
+        \\"quoted key" = value
+        ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("quoted key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
 // TODO: test empty object - should be an error
@@ -918,15 +983,12 @@ test "basic object value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     switch (entry.value_ptr.*) {
         .Object => |obj| {
             const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
-            try testing.expectEqualStrings("a", entry_a.key_ptr.*);
             try doZombTypeStringTest("hello", entry_a.value_ptr.*);
 
             const entry_b = obj.getEntry("b") orelse return error.KeyNotFound;
-            try testing.expectEqualStrings("b", entry_b.key_ptr.*);
             try doZombTypeStringTest("goodbye", entry_b.value_ptr.*);
         },
         else => return error.UnexpectedValue,
@@ -945,15 +1007,12 @@ test "nested object value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     switch (entry.value_ptr.*) {
         .Object => |obj_a| {
             const entry_a = obj_a.getEntry("a") orelse return error.KeyNotFound;
-            try testing.expectEqualStrings("a", entry_a.key_ptr.*);
             switch (entry_a.value_ptr.*) {
                 .Object => |obj_b| {
                     const entry_b = obj_b.getEntry("b") orelse return error.KeyNotFound;
-                    try testing.expectEqualStrings("b", entry_b.key_ptr.*);
                     try doZombTypeStringTest("value", entry_b.value_ptr.*);
                 },
                 else => return error.UnexpectedValue,
@@ -971,7 +1030,6 @@ test "basic array value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     switch (entry.value_ptr.*) {
         .Array => |arr| {
             try testing.expectEqual(@as(usize, 3), arr.items.len);
@@ -993,7 +1051,6 @@ test "nested array value" {
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
-    try testing.expectEqualStrings("key", entry.key_ptr.*);
     switch (entry.value_ptr.*) {
         .Array => |arr| {
             try testing.expectEqual(@as(usize, 1), arr.items.len);
