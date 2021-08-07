@@ -43,7 +43,7 @@ pub fn main() anyerror!void {
     var jsonWriter = json.writeStream(output_file.writer(), zomb.max_nested_depth);
     jsonWriter.whitespace = json.StringifyOptions.Whitespace{};
 
-    try zombValueToJson(z.map, &jsonWriter);
+    try zombValueToJson(zomb.ZombType{ .Object = z.map }, &jsonWriter);
 }
 
 fn zombValueToJson(value_: zomb.ZombType, jw_: anytype) anyerror!void {

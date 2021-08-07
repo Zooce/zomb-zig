@@ -80,7 +80,7 @@ pub const ZombMacro = struct {
 
 pub const Zomb = struct {
     arena: std.heap.ArenaAllocator,
-    map: ZombType,
+    map: ZombTypeMap,
 
     pub fn deinit(self: @This()) void {
         self.arena.deinit();
@@ -689,7 +689,7 @@ pub const Parser = struct {
         }
         return Zomb{
             .arena = out_arena,
-            .map = self.zomb_type_stack.pop().Element,
+            .map = self.zomb_type_stack.pop().Element.Object,
         };
     }
 
@@ -854,7 +854,7 @@ test "bare string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
@@ -863,7 +863,7 @@ test "empty quoted string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("", entry.value_ptr.*);
 }
 
@@ -872,7 +872,7 @@ test "quoted string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
@@ -881,7 +881,7 @@ test "empty raw string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("", entry.value_ptr.*);
 }
 
@@ -890,7 +890,7 @@ test "one line raw string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
@@ -902,7 +902,7 @@ test "two line raw string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("one\ntwo", entry.value_ptr.*);
 }
 
@@ -915,7 +915,7 @@ test "raw string value with empty newline in the middle" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("one\n\ntwo", entry.value_ptr.*);
 }
 
@@ -924,7 +924,7 @@ test "bare string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("onetwothree", entry.value_ptr.*);
 }
 
@@ -935,7 +935,7 @@ test "quoted string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("one two three", entry.value_ptr.*);
 }
 
@@ -948,7 +948,7 @@ test "raw string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("part one\npart two", entry.value_ptr.*);
 }
 
@@ -960,7 +960,7 @@ test "general string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("bare_stringquoted stringraw\nstring", entry.value_ptr.*);
 }
 
@@ -971,7 +971,7 @@ test "quoted key" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("quoted key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("quoted key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
@@ -980,7 +980,7 @@ test "empty object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     switch (entry.value_ptr.*) {
         .Object => |obj| {
             try testing.expectEqual(@as(usize, 0), obj.count());
@@ -999,7 +999,7 @@ test "basic object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     switch (entry.value_ptr.*) {
         .Object => |obj| {
             const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
@@ -1023,7 +1023,7 @@ test "nested object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     switch (entry.value_ptr.*) {
         .Object => |obj_a| {
             const entry_a = obj_a.getEntry("a") orelse return error.KeyNotFound;
@@ -1044,7 +1044,7 @@ test "empty array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     switch (entry.value_ptr.*) {
         .Array => |arr| {
             try testing.expectEqual(@as(usize, 0), arr.items.len);
@@ -1058,7 +1058,7 @@ test "basic array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     switch (entry.value_ptr.*) {
         .Array => |arr| {
             try testing.expectEqual(@as(usize, 3), arr.items.len);
@@ -1079,7 +1079,7 @@ test "nested array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
     switch (entry.value_ptr.*) {
         .Array => |arr| {
             try testing.expectEqual(@as(usize, 1), arr.items.len);
