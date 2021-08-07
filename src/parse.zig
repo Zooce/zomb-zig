@@ -220,6 +220,7 @@ pub const Parser = struct {
                 // stage   expected tokens  >> next stage/state
                 // --------------------------------------------------
                 //     0   String           >> 1
+                //         CloseCurly       >> Object (stage 2)
                 //         else             >> error
                 // --------------------------------------------------
                 //     1   Equals           >> Value
@@ -235,6 +236,11 @@ pub const Parser = struct {
                             }
                             self.state_stage = 1;
                         },
+                        .CloseCurly => { // empty object case
+                            self.state = State.Object;
+                            self.state_stage = 2;
+                            continue :parseloop; // keep the token
+                        },
                         else => return error.UnexpectedKvPairStage0Token,
                     },
                     1 => switch (token.token_type) { // equals
@@ -249,7 +255,9 @@ pub const Parser = struct {
                 //     0   OpenCurly        >> 1
                 //         else             >> error
                 // --------------------------------------------
-                // pop 1   String           >> KvPair (keep token)
+                // pop 1   else             >> 2 (keep token)
+                // --------------------------------------------
+                //     2   String           >> KvPair (keep token)
                 //         CloseCurly       >> stack or Decl
                 //         else             >> error
                 .Object => switch (self.state_stage) {
@@ -271,25 +279,27 @@ pub const Parser = struct {
                         } else {
                             try self.stackConsumeKvPair();
                         }
-                        switch (token.token_type) {
-                            .String => {
-                                self.state = State.KvPair;
-                                self.state_stage = 0;
-                                continue :parseloop; // keep the token
-                            },
-                            .CloseCurly => {
-                                if (self.macro_ptr) |_| {
-                                    const object = self.zomb_macro_type_stack.pop().Object;
-                                    if (self.macroStackTop()) |stack_type| {
-                                        try stack_type.List.ObjectList.append(object);
-                                    } else {
-                                        return error.MacroStackEmpty;
-                                    }
+                        self.state_stage = 2;
+                        continue :parseloop; // keep the token
+                    },
+                    2 => switch (token.token_type) {
+                        .String => {
+                            self.state = State.KvPair;
+                            self.state_stage = 0;
+                            continue :parseloop; // keep the token
+                        },
+                        .CloseCurly => {
+                            if (self.macro_ptr) |_| {
+                                const object = self.zomb_macro_type_stack.pop().Object;
+                                if (self.macroStackTop()) |stack_type| {
+                                    try stack_type.List.ObjectList.append(object);
+                                } else {
+                                    return error.MacroStackEmpty;
                                 }
-                                try self.stateStackPop(); // done with this object, consume it in the parent
-                            },
-                            else => return error.UnexpectedObjectStage1Token,
-                        }
+                            }
+                            try self.stateStackPop(); // done with this object, consume it in the parent
+                        },
+                        else => return error.UnexpectedObjectStage1Token,
                     },
                     else => return error.UnexpectedObjectStage,
                 },
@@ -299,8 +309,10 @@ pub const Parser = struct {
                 //     0   OpenSquare       >> Value
                 //         else             >> error
                 // --------------------------------------------
-                // pop 1   CloseSquare      >> stack or Decl
-                //         else             >> Value
+                // pop 1   else             >> 2 (keep token)
+                //---------------------------------------------
+                //     2   CloseSquare      >> stack or Decl
+                //         else             >> Value (keep token)
                 .Array => switch (self.state_stage) {
                     0 => switch (token.token_type) { // open square
                         .OpenSquare => {
@@ -319,23 +331,25 @@ pub const Parser = struct {
                         } else {
                             try self.stackConsumeArrayValue();
                         }
-                        switch (token.token_type) {
-                            .CloseSquare => {
-                                if (self.macro_ptr) |_| {
-                                    const array = self.zomb_macro_type_stack.pop().Array;
-                                    if (self.macroStackTop()) |stack_type| {
-                                        try stack_type.List.ArrayList.append(array);
-                                    } else {
-                                        return error.MacroStackEmpty;
-                                    }
+                        self.state_stage = 2;
+                        continue :parseloop; // keep the token
+                    },
+                    2 => switch (token.token_type) {
+                        .CloseSquare => {
+                            if (self.macro_ptr) |_| {
+                                const array = self.zomb_macro_type_stack.pop().Array;
+                                if (self.macroStackTop()) |stack_type| {
+                                    try stack_type.List.ArrayList.append(array);
+                                } else {
+                                    return error.MacroStackEmpty;
                                 }
-                                try self.stateStackPop(); // done with this array, consume it in the parent
-                            },
-                            else => {
-                                try self.stateStackPush(stack_value); // check for another value
-                                continue :parseloop; // keep the token
-                            },
-                        }
+                            }
+                            try self.stateStackPop(); // done with this array, consume it in the parent
+                        },
+                        else => {
+                            try self.stateStackPush(stack_value); // check for another value
+                            continue :parseloop; // keep the token
+                        },
                     },
                     else => return error.UnexpectedArrayStage,
                 },
@@ -467,6 +481,10 @@ pub const Parser = struct {
                             }
                             try self.stateStackPush(stack_array);
                             continue :parseloop; // keep the token
+                        },
+                        .CloseSquare => { // empty array case
+                            try self.stateStackPop();
+                            self.state_stage = 2;
                         },
                         else => return error.UnexpectedValueStage0Token,
                     },
@@ -840,19 +858,32 @@ test "bare string value" {
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
+test "empty quoted string value" {
+    const input = "key = \"\"";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("", entry.value_ptr.*);
+}
+
 test "quoted string value" {
     const input = "key = \"value\"";
-    var parser = Parser.init(input, testing.allocator);
-    defer parser.deinit();
-
-    const z = try parser.parse(testing.allocator);
+    const z = try parseTestInput(input);
     defer z.deinit();
 
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
-// TODO: test empty quoted string -- should be an error
+test "empty raw string value" {
+    const input = "key = \\\\";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    try doZombTypeStringTest("", entry.value_ptr.*);
+}
 
 test "one line raw string value" {
     const input = "key = \\\\value";
@@ -862,8 +893,6 @@ test "one line raw string value" {
     const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
-
-// TODO: test empty raw string - should be an error
 
 test "two line raw string value" {
     const input =
@@ -946,7 +975,19 @@ test "quoted key" {
     try doZombTypeStringTest("value", entry.value_ptr.*);
 }
 
-// TODO: test empty object - should be an error
+test "empty object value" {
+    const input = "key = {}";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    switch (entry.value_ptr.*) {
+        .Object => |obj| {
+            try testing.expectEqual(@as(usize, 0), obj.count());
+        },
+        else => return error.UnexpectedValue,
+    }
+}
 
 test "basic object value" {
     const input =
@@ -998,7 +1039,19 @@ test "nested object value" {
     }
 }
 
-// TODO: test empty array - should be an error
+test "empty array value" {
+    const input = "key = []";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.Object.getEntry("key") orelse return error.KeyNotFound;
+    switch (entry.value_ptr.*) {
+        .Array => |arr| {
+            try testing.expectEqual(@as(usize, 0), arr.items.len);
+        },
+        else => return error.UnexpectedValue,
+    }
+}
 
 test "basic array value" {
     const input = "key = [ a b c ]";
