@@ -256,13 +256,9 @@ pub const Parser = struct {
                     0 => switch (token.token_type) {
                         .OpenCurly => {
                             if (self.macro_ptr) |_| {
-                                try self.zomb_macro_type_stack.append(.{ .Object =
-                                    .{ .Object = ZombMacroTypeMap.init(&self.arena.allocator) }
-                                });
+                                try self.zomb_macro_type_stack.append(.{ .Object = .{ .Object = ZombMacroTypeMap.init(&self.arena.allocator) } });
                             } else {
-                                try self.zomb_type_stack.append(.{ .Element =
-                                    .{ .Object = ZombTypeMap.init(&out_arena.allocator) }
-                                });
+                                try self.zomb_type_stack.append(.{ .Element = .{ .Object = ZombTypeMap.init(&out_arena.allocator) } });
                             }
                             self.state = State.KvPair;
                             self.state_stage = 0;
@@ -309,13 +305,9 @@ pub const Parser = struct {
                     0 => switch (token.token_type) { // open square
                         .OpenSquare => {
                             if (self.macro_ptr) |_| {
-                                try self.zomb_macro_type_stack.append(.{ .Array =
-                                    .{ .Array = ZombMacroTypeArray.init(&self.arena.allocator) }
-                                });
+                                try self.zomb_macro_type_stack.append(.{ .Array = .{ .Array = ZombMacroTypeArray.init(&self.arena.allocator) } });
                             } else {
-                                try self.zomb_type_stack.append(.{ .Element =
-                                    .{ .Array = ZombTypeArray.init(&out_arena.allocator) }
-                                });
+                                try self.zomb_type_stack.append(.{ .Element = .{ .Array = ZombTypeArray.init(&out_arena.allocator) } });
                             }
                             try self.stateStackPush(stack_value);
                         },
@@ -351,8 +343,8 @@ pub const Parser = struct {
                 // this is a special state where we're finally parsing actual values - we do have transistions here, but
                 // there are some relatively-complicated scenarios for them, so a state transition table doesn't really
                 // do us any good
-                .Value => switch(self.state_stage) {
-                    0 => switch(token.token_type) { // value
+                .Value => switch (self.state_stage) {
+                    0 => switch (token.token_type) { // value
                         .String, .RawString => {
                             const string_slice = try token.slice(self.input);
                             if (self.macro_ptr) |_| {
@@ -371,9 +363,7 @@ pub const Parser = struct {
                                         else => return error.UnexpectedStringValueMacroStackType,
                                     },
                                     .Key, .Array, .Empty => {
-                                        try self.zomb_macro_type_stack.append(.{ .List =
-                                            .{ .StringList = std.ArrayList(ZombMacroStringValue).init(&self.arena.allocator) }
-                                        });
+                                        try self.zomb_macro_type_stack.append(.{ .List = .{ .StringList = std.ArrayList(ZombMacroStringValue).init(&self.arena.allocator) } });
                                         continue :parseloop; // keep the token
                                     },
                                     else => return error.UnexpectedStringValueMacroStackType,
@@ -384,17 +374,13 @@ pub const Parser = struct {
                                     .Element => |*elem| switch (elem.*) {
                                         .String => |*str| try str.appendSlice(string_slice),
                                         .Array => {
-                                            try self.zomb_type_stack.append(.{ .Element =
-                                                .{ .String = std.ArrayList(u8).init(&out_arena.allocator) }
-                                            });
+                                            try self.zomb_type_stack.append(.{ .Element = .{ .String = std.ArrayList(u8).init(&out_arena.allocator) } });
                                             continue :parseloop; // keep the token
                                         },
                                         else => return error.UnexpectedStackElement,
                                     },
                                     .Key => {
-                                        try self.zomb_type_stack.append(.{ .Element =
-                                            .{ .String = std.ArrayList(u8).init(&out_arena.allocator) }
-                                        });
+                                        try self.zomb_type_stack.append(.{ .Element = .{ .String = std.ArrayList(u8).init(&out_arena.allocator) } });
                                         continue :parseloop; // keep the token
                                     },
                                 }
@@ -420,9 +406,7 @@ pub const Parser = struct {
                                         .ParameterList => |*params| try params.append(parameter),
                                     },
                                     .Key, .Array, .Empty => {
-                                        try self.zomb_macro_type_stack.append(.{ .List =
-                                            .{ .ParameterList = std.ArrayList([]const u8).init(&self.arena.allocator) }
-                                        });
+                                        try self.zomb_macro_type_stack.append(.{ .List = .{ .ParameterList = std.ArrayList([]const u8).init(&self.arena.allocator) } });
                                         continue :parseloop; // keep the token
                                     },
                                     else => return error.UnexpectedMacroParamKeyValueMacroStackType,
@@ -443,9 +427,7 @@ pub const Parser = struct {
                                     .List => |list_type| switch (list_type) {
                                         .ObjectList => {},
                                         .ParameterList => |params| {
-                                            var object_list = .{ .ObjectList =
-                                                std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator)
-                                            };
+                                            var object_list = .{ .ObjectList = std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator) };
                                             for (params.items) |p| try object_list.ObjectList.append(.{ .Parameter = p });
                                             var param_list = self.zomb_macro_type_stack.pop();
                                             param_list.List.ParameterList.deinit();
@@ -454,9 +436,7 @@ pub const Parser = struct {
                                         else => return error.UnexpectedMacroStackList,
                                     },
                                     .Key, .Array, .Empty => {
-                                        try self.zomb_macro_type_stack.append(.{ .List =
-                                            .{ .ObjectList = std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator) }
-                                        });
+                                        try self.zomb_macro_type_stack.append(.{ .List = .{ .ObjectList = std.ArrayList(ZombMacroObjectValue).init(&self.arena.allocator) } });
                                     },
                                     else => return error.UnexpectedMacroStackTop,
                                 }
@@ -471,9 +451,7 @@ pub const Parser = struct {
                                     .List => |list_type| switch (list_type) {
                                         .ArrayList => {},
                                         .ParameterList => |params| {
-                                            var array_list = .{ .ArrayList =
-                                                std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator)
-                                            };
+                                            var array_list = .{ .ArrayList = std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator) };
                                             for (params.items) |p| try array_list.ArrayList.append(.{ .Parameter = p });
                                             var param_list = self.zomb_macro_type_stack.pop();
                                             param_list.List.ParameterList.deinit();
@@ -482,9 +460,7 @@ pub const Parser = struct {
                                         else => return error.UnexpectedMacroStackList,
                                     },
                                     .Key, .Array, .Empty => {
-                                        try self.zomb_macro_type_stack.append(.{ .List =
-                                            .{ .ArrayList = std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator) }
-                                        });
+                                        try self.zomb_macro_type_stack.append(.{ .List = .{ .ArrayList = std.ArrayList(ZombMacroArrayValue).init(&self.arena.allocator) } });
                                     },
                                     else => return error.UnexpectedMacroStackTop,
                                 }
@@ -494,7 +470,7 @@ pub const Parser = struct {
                         },
                         else => return error.UnexpectedValueStage0Token,
                     },
-                    1 => switch(token.token_type) { // plus sign OR raw string OR exit value state
+                    1 => switch (token.token_type) { // plus sign OR raw string OR exit value state
                         .Plus => self.state_stage = 0,
                         .RawString => {
                             self.state_stage = 0;
@@ -662,7 +638,7 @@ pub const Parser = struct {
                         else => return error.UnexpectedMacroExprParamsStage1Token,
                     },
                     2 => switch (token.token_type) { // more than one parameter
-                        .String, => {},
+                        .String => {},
                         .MacroParamKey => {
                             if (self.macro_ptr == null) {
                                 return error.MacroParamKeyUsedOutsideMacroDecl;
@@ -893,7 +869,7 @@ test "two line raw string value" {
     const input =
         \\key = \\one
         \\      \\two
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -906,7 +882,7 @@ test "raw string value with empty newline in the middle" {
         \\key = \\one
         \\      \\
         \\      \\two
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -926,7 +902,7 @@ test "bare string concatenation" {
 test "quoted string concatenation" {
     const input =
         \\key = "one " + "two " + "three"
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -939,7 +915,7 @@ test "raw string concatenation" {
         \\key = \\part one
         \\      \\
         \\    + \\part two
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -951,7 +927,7 @@ test "general string concatenation" {
     const input =
         \\key = bare_string + "quoted string" + \\raw
         \\                                      \\string
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -962,7 +938,7 @@ test "general string concatenation" {
 test "quoted key" {
     const input =
         \\"quoted key" = value
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -978,7 +954,7 @@ test "basic object value" {
         \\    a = hello
         \\    b = goodbye
         \\}
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -1002,7 +978,7 @@ test "nested object value" {
         \\        b = value
         \\    }
         \\}
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
@@ -1046,7 +1022,7 @@ test "nested array value" {
         \\key = [
         \\    [ a b c ]
         \\]
-        ;
+    ;
     const z = try parseTestInput(input);
     defer z.deinit();
 

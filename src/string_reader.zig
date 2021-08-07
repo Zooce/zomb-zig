@@ -5,7 +5,7 @@ pub const StringReader = struct {
     str: []const u8,
     cursor: u64 = 0,
 
-    const Error = error{SeekError, EndOfStream};
+    const Error = error{ SeekError, EndOfStream };
     const Self = @This();
     const Reader = std.io.Reader(*Self, Error, read);
 

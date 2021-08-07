@@ -2,7 +2,6 @@ const std = @import("std");
 
 pub fn Scanner(comptime InputType: type, max_buffer_size_: anytype) type {
     return struct {
-
         const Self = @This();
 
         const TestData = struct {
@@ -181,12 +180,11 @@ test "scanner" {
             \\buffer = {s}
             \\buffer_cursor = {}
             \\
-            , .{
-                scanner.input_cursor,
-                scanner.buffer,
-                scanner.buffer_cursor,
-            }
-        );
+        , .{
+            scanner.input_cursor,
+            scanner.buffer,
+            scanner.buffer_cursor,
+        });
     }
     defer scanner.deinit();
 

@@ -29,9 +29,7 @@ const NonTokenDelimiter = enum(u8) {
 
 /// A enum that represents all individual delimiters (regardless of their use as actual tokens).
 const Delimiter = @Type(blk: {
-    const fields = @typeInfo(TokenDelimiter).Enum.fields
-        ++ @typeInfo(NonTokenDelimiter).Enum.fields
-        ++ &[_]std.builtin.TypeInfo.EnumField{ .{ .name = "None", .value = 0 } };
+    const fields = @typeInfo(TokenDelimiter).Enum.fields ++ @typeInfo(NonTokenDelimiter).Enum.fields ++ &[_]std.builtin.TypeInfo.EnumField{.{ .name = "None", .value = 0 }};
 
     break :blk .{
         .Enum = .{
@@ -120,7 +118,7 @@ pub const Token = struct {
         if (self.offset + self.size > buffer_.len) {
             return error.TokenSizeTooBig;
         }
-        return buffer_[self.offset..self.offset + self.size];
+        return buffer_[self.offset .. self.offset + self.size];
     }
 };
 
@@ -200,7 +198,6 @@ pub const Tokenizer = struct {
             // , .{self.state, self.state_stage, self.token, self.token.slice(self.buffer), self.peek().?});
 
             switch (self.state) {
-
                 .None => {
                     if ((try self.skipSeparators()) == false) return self.token;
 
@@ -389,7 +386,7 @@ pub const Tokenizer = struct {
                         else => {
                             self.tokenComplete();
                             return self.token;
-                        }
+                        },
                     },
                     else => return error.UnexpectedRawStringStage,
                 },
@@ -419,7 +416,6 @@ pub const Tokenizer = struct {
                     },
                     else => return error.UnexpectedBareStringOrCommentStage,
                 },
-
             } // end state switch
         } // end :loop
 
@@ -580,7 +576,6 @@ pub const Tokenizer = struct {
     }
 }; // end Tokenizer struct
 
-
 //==============================================================================
 //
 //
@@ -606,12 +601,24 @@ const ExpectedToken = struct {
 fn expectToken(expected_token_: ExpectedToken, token_: Token, orig_str_: []const u8) !void {
     const str = try token_.slice(orig_str_);
     var ok = true;
-    testing.expectEqualStrings(expected_token_.str, str) catch { ok = false; };
-    testing.expectEqual(expected_token_.start_buffer, token_.start_buffer) catch { ok = false; };
-    testing.expectEqual(expected_token_.end_buffer, token_.end_buffer) catch { ok = false; };
-    testing.expectEqual(expected_token_.line, token_.line) catch { ok = false; };
-    testing.expectEqual(expected_token_.token_type, token_.token_type) catch { ok = false; };
-    testing.expectEqual(expected_token_.is_valid, token_.is_valid) catch { ok = false; };
+    testing.expectEqualStrings(expected_token_.str, str) catch {
+        ok = false;
+    };
+    testing.expectEqual(expected_token_.start_buffer, token_.start_buffer) catch {
+        ok = false;
+    };
+    testing.expectEqual(expected_token_.end_buffer, token_.end_buffer) catch {
+        ok = false;
+    };
+    testing.expectEqual(expected_token_.line, token_.line) catch {
+        ok = false;
+    };
+    testing.expectEqual(expected_token_.token_type, token_.token_type) catch {
+        ok = false;
+    };
+    testing.expectEqual(expected_token_.is_valid, token_.is_valid) catch {
+        ok = false;
+    };
 
     if (!ok) {
         return error.TokenTestFailure;
@@ -631,7 +638,7 @@ fn doTokenTest(str_: []const u8, expected_tokens_: []const ExpectedToken) !void 
                 \\  {}
                 \\
                 \\
-            , .{i, expected_token.str, expected_token.line, expected_token.token_type, actual_token});
+            , .{ i, expected_token.str, expected_token.line, expected_token.token_type, actual_token });
         }
         try expectToken(expected_token, actual_token, str_);
     }
@@ -691,7 +698,7 @@ test "bare strings" {
 test "quoted string" {
     const str = "\"this is a \\\"quoted\\\" string\\u1234 \\t\\r\\n$(){}[].,=\"";
     const expected_tokens = [_]ExpectedToken{
-        ExpectedToken{ .str = str[1..str.len - 1], .line = 1, .token_type = TokenType.String },
+        ExpectedToken{ .str = str[1 .. str.len - 1], .line = 1, .token_type = TokenType.String },
     };
     try doTokenTest(str, &expected_tokens);
 }
