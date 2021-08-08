@@ -485,6 +485,7 @@ pub const Parser = struct {
                         .CloseSquare => { // empty array case
                             try self.stateStackPop();
                             self.state_stage = 2;
+                            continue :parseloop; // keep the token
                         },
                         else => return error.UnexpectedValueStage0Token,
                     },
@@ -1089,6 +1090,94 @@ test "nested array value" {
                     try doZombTypeStringTest("a", arr_inner.items[0]);
                     try doZombTypeStringTest("b", arr_inner.items[1]);
                     try doZombTypeStringTest("c", arr_inner.items[2]);
+                },
+                else => return error.UnexpectedValue,
+            }
+        },
+        else => return error.UnexpectedValue,
+    }
+}
+
+test "array in an object" {
+    const input =
+        \\key = {
+        \\    a = [ 1 2 3 ]
+        \\}
+    ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
+    switch (entry.value_ptr.*) {
+        .Object => |obj| {
+            const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
+            switch (entry_a.value_ptr.*) {
+                .Array => |arr| {
+                    try testing.expectEqual(@as(usize, 3), arr.items.len);
+                    try doZombTypeStringTest("1", arr.items[0]);
+                    try doZombTypeStringTest("2", arr.items[1]);
+                    try doZombTypeStringTest("3", arr.items[2]);
+                },
+                else => return error.UnexpectedValue,
+            }
+        },
+        else => return error.UnexpectedValue,
+    }
+}
+
+test "object in an array" {
+    const input = "key = [ { a = b c = d } ]";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
+    switch (entry.value_ptr.*) {
+        .Array => |arr| {
+            try testing.expectEqual(@as(usize, 1), arr.items.len);
+            switch (arr.items[0]) {
+                .Object => |obj| {
+                    const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
+                    try doZombTypeStringTest("b", entry_a.value_ptr.*);
+                    const entry_c = obj.getEntry("c") orelse return error.KeyNotFound;
+                    try doZombTypeStringTest("d", entry_c.value_ptr.*);
+                },
+                else => return error.UnexpectedValue,
+            }
+        },
+        else => return error.UnexpectedValue,
+    }
+}
+
+test "empty array in object" {
+    const input = "key = { a = [] }";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
+    switch (entry.value_ptr.*) {
+        .Object => |obj| {
+            const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
+            switch (entry_a.value_ptr.*) {
+                .Array => |arr| try testing.expectEqual(@as(usize, 0), arr.items.len),
+                else => return error.UnexpectedValue,
+            }
+        },
+        else => return error.UnexpectedValue,
+    }
+}
+
+test "empty object in array" {
+    const input = "key = [{}]";
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
+    switch (entry.value_ptr.*) {
+        .Array => |arr| {
+            try testing.expectEqual(@as(usize, 1), arr.items.len);
+            switch (arr.items[0]) {
+                .Object => |obj| {
+                    try testing.expectEqual(@as(usize, 0), obj.count());
                 },
                 else => return error.UnexpectedValue,
             }
