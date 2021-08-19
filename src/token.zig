@@ -1,12 +1,14 @@
 const std = @import("std");
-const Scanner = @import("scan.zig").Scanner;
+// const Scanner = @import("scan.zig").Scanner;
 
 /// These are the delimiters that will be used as tokens.
-const TokenDelimiter = enum(u8) {
+const DelimiterToken = enum(u8) {
+    Percent = '%', // 0x25  37
     OpenParen = '(', // 0x28  40
     CloseParen = ')', // 0x29  41
-    Plus = '+', // 0x2B
+    Plus = '+', // 0x2B 43
     Equals = '=', // 0x3D  61
+    Question = '?', // 0x3F  63
     OpenSquare = '[', // 0x5B  91
     CloseSquare = ']', // 0x5D  93
     OpenCurly = '{', // 0x7B  123
@@ -14,14 +16,13 @@ const TokenDelimiter = enum(u8) {
 };
 
 /// These are the delimiters that will NOT be used as tokens.
-const NonTokenDelimiter = enum(u8) {
+const DelimiterNonToken = enum(u8) {
     Tab = '\t', // 0x09  9
     LineFeed = '\n', // 0x0A  10
     CarriageReturn = '\r', // 0x0D  13
     Space = ' ', // 0x20  32
     Quote = '"', // 0x22  34
     Dollar = '$', // 0x24  36
-    Percent = '%', // 0x25  37
     Comma = ',', // 0x2C  44
     Dot = '.', // 0x2E  46
     ReverseSolidus = '\\', // 0x5C  92
@@ -29,7 +30,7 @@ const NonTokenDelimiter = enum(u8) {
 
 /// A enum that represents all individual delimiters (regardless of their use as actual tokens).
 const Delimiter = @Type(blk: {
-    const fields = @typeInfo(TokenDelimiter).Enum.fields ++ @typeInfo(NonTokenDelimiter).Enum.fields ++ &[_]std.builtin.TypeInfo.EnumField{.{ .name = "None", .value = 0 }};
+    const fields = @typeInfo(DelimiterToken).Enum.fields ++ @typeInfo(DelimiterNonToken).Enum.fields ++ &[_]std.builtin.TypeInfo.EnumField{.{ .name = "None", .value = 0 }};
 
     break :blk .{
         .Enum = .{
@@ -53,7 +54,7 @@ const delimiters = blk: {
     break :blk delims;
 };
 
-/// Special token types (usually a combination of Delimiters)
+/// Special token types (usually a combination of Delimiters and strings)
 const SpecialToken = enum(u8) {
     None = 0,
     Newline,
@@ -65,8 +66,9 @@ const SpecialToken = enum(u8) {
     MacroAccessor,
 };
 
+// The final TokenType comprised of SpecialTokens and DelimiterTokens.
 pub const TokenType = @Type(out: {
-    const fields = @typeInfo(SpecialToken).Enum.fields ++ @typeInfo(TokenDelimiter).Enum.fields;
+    const fields = @typeInfo(SpecialToken).Enum.fields ++ @typeInfo(DelimiterToken).Enum.fields;
     break :out .{
         .Enum = .{
             .layout = .Auto,
@@ -292,23 +294,38 @@ pub const Tokenizer = struct {
                     else => return error.UnexpectedCommonQuotedStringStage,
                 },
 
-                // TODO: add transition table comment
                 .MacroX => switch (self.state_stage) {
-                    0 => {
-                        switch (self.advance().?) {
-                            '$', '%', '.' => {
-                                self.token.offset = self.buffer_cursor;
-                                self.state_stage = 1;
-                            },
-                            else => return error.UnexpectedMacroXStage0Byte,
-                        }
-                    },
-                    1 => switch (self.peek().?) {
-                        '"' => {
-                            self.state_stage = 0;
-                            self.state = State.QuotedString;
+                    0 => switch (self.peek().?) { // initial delimiter
+                        '$', '.' => {
+                            _ = self.advance().?;
+                            self.state_stage = 2;
                         },
-                        else => self.state = State.BareString,
+                        '%' => {
+                            _ = self.consume().?;
+                            self.state_stage = 1;
+                        },
+                        else => return error.UnexpectedMacroXStage0Byte,
+                    },
+                    1 => switch (self.peek().?) { // possible single percent token
+                        ' ', '\t', '\r', '\n', '[' => {
+                            self.token.token_type = TokenType.Percent;
+                            self.tokenComplete();
+                            return self.token;
+                        },
+                        else => { // reverse the consumption of the percent delimiter
+                            self.token.size -= 1;
+                            self.state_stage = 2;
+                        },
+                    },
+                    2 => {
+                        switch (self.peek().?) {
+                            '"' => {
+                                self.state_stage = 0;
+                                self.state = State.QuotedString;
+                            },
+                            else => self.state = State.BareString,
+                        }
+                        self.token.offset = self.buffer_cursor;
                     },
                     else => return error.UnexpectedMacroXStage,
                 },
@@ -930,6 +947,33 @@ test "number-number kv-pair" {
         ExpectedToken{ .str = "123", .line = 1, .token_type = TokenType.String },
         ExpectedToken{ .str = "=", .line = 1, .token_type = TokenType.Equals },
         ExpectedToken{ .str = "456", .line = 1, .token_type = TokenType.String },
+    };
+    try doTokenTest(str, &expected_tokens);
+}
+
+test "batching tokens" {
+    const str =
+        \\key =
+        \\    $m(? 3, ?) % [
+        \\        [ a b ]
+        \\    ]
+    ;
+    const expected_tokens = [_]ExpectedToken{
+        ExpectedToken{ .str = "key", .line = 1, .token_type = TokenType.String },
+        ExpectedToken{ .str = "=", .line = 1, .token_type = TokenType.Equals },
+        ExpectedToken{ .str = "m", .line = 2, .token_type = TokenType.MacroKey },
+        ExpectedToken{ .str = "(", .line = 2, .token_type = TokenType.OpenParen },
+        ExpectedToken{ .str = "?", .line = 2, .token_type = TokenType.Question },
+        ExpectedToken{ .str = "3", .line = 2, .token_type = TokenType.String },
+        ExpectedToken{ .str = "?", .line = 2, .token_type = TokenType.Question },
+        ExpectedToken{ .str = ")", .line = 2, .token_type = TokenType.CloseParen },
+        ExpectedToken{ .str = "%", .line = 2, .token_type = TokenType.Percent },
+        ExpectedToken{ .str = "[", .line = 2, .token_type = TokenType.OpenSquare },
+        ExpectedToken{ .str = "[", .line = 3, .token_type = TokenType.OpenSquare },
+        ExpectedToken{ .str = "a", .line = 3, .token_type = TokenType.String },
+        ExpectedToken{ .str = "b", .line = 3, .token_type = TokenType.String },
+        ExpectedToken{ .str = "]", .line = 3, .token_type = TokenType.CloseSquare },
+        ExpectedToken{ .str = "]", .line = 4, .token_type = TokenType.CloseSquare },
     };
     try doTokenTest(str, &expected_tokens);
 }

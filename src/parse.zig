@@ -62,7 +62,7 @@ pub const ZombMacroExpr = struct {
     };
 
     key: []const u8,
-    params: ?ZombTypeMap = null, // TODO: can this just be an array list?
+    params: ?ZombTypeMap = null,
     accessors: ?std.ArrayList(Accessor) = null,
 };
 
@@ -1040,6 +1040,8 @@ test "nested object value" {
     }
 }
 
+// TODO: object + object concatenation
+
 test "empty array value" {
     const input = "key = []";
     const z = try parseTestInput(input);
@@ -1097,6 +1099,8 @@ test "nested array value" {
         else => return error.UnexpectedValue,
     }
 }
+
+// TODO: array + array concatenation
 
 test "array in an object" {
     const input =
