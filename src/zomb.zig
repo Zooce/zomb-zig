@@ -7,10 +7,10 @@ pub const Token = token.Token;
 
 const parse = @import("parse.zig");
 pub const Parser = parse.Parser;
-pub const ZombType = parse.ZombType;
+pub const ZombValue = parse.ZombValue;
 
-pub const ZombTypeMap = parse.ZombTypeMap;
-pub const ZombTypeArray = parse.ZombTypeArray;
+pub const ZombValueMap = parse.ZombValueMap;
+pub const ZombValueArray = parse.ZombValueArray;
 pub const Zomb = parse.Zomb;
 
 pub const max_nested_depth = parse.max_stack_size;
