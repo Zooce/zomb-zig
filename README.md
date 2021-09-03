@@ -1,3 +1,3 @@
 # ZOMB file encoding/decoding library for Zig
 
-TODO
+THIS IS A WORK IN PROGRESS. PLEASE STAY TUNED!
