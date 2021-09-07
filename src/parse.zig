@@ -1687,4 +1687,16 @@ test "macro - macro expression in macro declaration" {
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
+
+    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
+    switch (entry.value_ptr.*) {
+        .Object => |obj| {
+            const scope_entry = obj.getEntry("scope") orelse return error.KeyNotFound;
+            try doZombValueStringTest("hello world", scope_entry.value_ptr.*);
+
+            const color_entry = obj.getEntry("color") orelse return error.KeyNotFound;
+            try doZombValueStringTest("#0000000F", color_entry.value_ptr.*);
+        },
+        else => return error.UnexpectedValue,
+    }
 }
