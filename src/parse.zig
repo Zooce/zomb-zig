@@ -1376,15 +1376,13 @@ pub const Parser = struct {
                 keep_token = true;
             },
             .ObjectBegin => {
-                if (self.token.?.token_type == .OpenCurly) {
-                    if (self.macro_ptr) |_| {
-                        try self.zomb_macro_value_stack.append(.{ .Object = .{ .Object = ZombMacroValueMap.init(&self.arena.allocator) } });
-                    } else {
-                        try self.zomb_value_stack.append(.{ .Value = .{ .Object = std.StringArrayHashMap(ZombValue).init(&out_arena.allocator) } });
-                    }
+                if (self.macro_ptr) |_| {
+                    try self.zomb_macro_value_stack.append(.{ .Object = .{ .Object = ZombMacroValueMap.init(&self.arena.allocator) } });
+                } else {
+                    try self.zomb_value_stack.append(.{ .Value = .{ .Object = std.StringArrayHashMap(ZombValue).init(&out_arena.allocator) } });
                 }
             },
-            .Key => if (self.token.?.token_type == .String) {
+            .Key => {
                 const key = .{ .Key = token_slice };
                 if (self.macro_ptr) |_| {
                     try self.zomb_macro_value_stack.append(key);
@@ -1393,7 +1391,7 @@ pub const Parser = struct {
                 }
             },
             .Equals => {}, // TODO: remove this since we don't need to do anything here?
-            .ObjectConsume => {
+            .ConsumeObjectEntry => {
                 // const val = self.stack.pop().List;
                 // const key = self.stack.pop().Key;
                 // var obj_ptr = &self.stack.items[self.stack.items.len - 1];
@@ -1420,7 +1418,36 @@ pub const Parser = struct {
                 },
                 else => {},
             }
-            // TODO: Array states
+
+            // Arrays
+            .ArrayBegin => {
+                if (self.macro_ptr) |_| {
+                    try self.zomb_macro_value_stack.append(.{ .Array = .{ .Array = ZombMacroValueArray.init(&self.arena.allocator) } });
+                } else {
+                    try self.zomb_value_stack.append(.{ .Value = .{ .Array = std.ArrayList(ZombValue).init(&out_arena.allocator) } });
+                }
+            },
+            .ConsumeArrayItem => {
+                if (self.macro_ptr) |_| {
+                    const val = self.zomb_macro_value_stack.pop();
+                    var array_ptr = try self.macroStackTop();
+                    try array_ptr.*.Array.Array.append(val.List);
+                } else {
+                    const val = self.zomb_value_stack.pop().Value;
+                    var array = &self.zomb_value_stack.items[self.zomb_value_stack.items.len - 1].Value.Array;
+                    try array.append(val);
+                }
+                keep_token = true;
+            },
+            .ArrayEnd => switch (self.token.?.token_type) {
+                .CloseSquare => if (self.macro_ptr) |_| {
+                    const array = self.zomb_macro_value_stack.pop().Array;
+                    var list_ptr = try self.macroStackTop();
+                    try list_ptr.*.List.ArrayList.append(array);
+                },
+                else => keep_token = true,
+            },
+
             .Value => switch (self.token.?.token_type) {
                 .String, .RawString => {
                     if (self.macro_ptr) |_| {
@@ -1563,11 +1590,101 @@ pub const Parser = struct {
                 },
                 .CloseSquare => keep_token = true,
             }
-            .ValueConcat => switch (self.token.?.token_type) {
-                .Plus => {},
+            .ValueConcat => if (self.token.?.token_type != .Plus) {
+                keep_token = true,
+            },
+
+            // Macro Declaration
+            .MacroDeclKey => {
+                var res = try self.macro_map.getOrPut(token_slice);
+                if (res.found_existing) return error.DuplicateMacroName;
+                res.value_ptr.* = ZombMacro{};
+                self.macro_ptr = res.value_ptr;
+            },
+            .MacroDeclOptionalParams => if (self.token.?.token_type == .OpenParen) {
+                self.macro_ptr.?.*.params = std.StringArrayHashMap(u32).init(&self.arena.allocator);
+            },
+            .MacroDeclParams => switch (self.token.?.token_type) {
+                .String => {
+                    var res = try self.macro_ptr.?.*.params.?.getOrPut(token_slice);
+                    if (res.found_existing) return error.DuplicateMacroParamName;
+                    res.value_ptr.* = 0;
+                },
+                .CloseParen => if (self.macro_ptr.?.*.params.?.count() == 0) {
+                    return error.EmptyMacroDeclParams;
+                },
+                else => {},
+            },
+
+            // Macro Expression
+            .MacroExprKey => {
+                if (self.macro_ptr) |_| {
+                    try self.zomb_macro_value_stack.append(.{ .Expr = .{ .Expr = ZombMacroDeclExpr{ .key = token_slice } } });
+                } else {
+                    try self.zomb_value_stack.append(.{ .Expr = ZombMacroExpr{ .key = token_slice } });
+                }
+            },
+            .MacroExprOptionalArgs => keep_token = true,
+            .MacroExprOptionalAccessors => {
+                if (self.token.?.token_type == .MacroAccessor) {
+                    if (self.macro_ptr) |_| {
+                        var expr = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].Expr.Expr;
+                        if (expr.*.accessors == null) {
+                            expr.*.accessors = std.ArrayList([]const u8).init(&self.arena.allocator);
+                        }
+                    } else {
+                        var expr = &self.zomb_value_stack.items[self.zomb_value_stack.items.len - 1].Expr;
+                        if (expr.*.accessors == null) {
+                            expr.*.accessors = std.ArrayList([]const u8).init(&self.arena.allocator);
+                        }
+                    }
+                }
+                keep_token = true;
+            },
+            .MacroExprAccessors => switch (self.token.?.token_type) {
+                .MacroAccessor => {
+                    if (self.macro_ptr) |_| {
+                        var expr = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].Expr.Expr;
+                        try expr.*.accessors.?.append(token_slice);
+                    } else {
+                        var expr = &self.zomb_value_stack.items[self.zomb_value_stack.items.len - 1].Expr;
+                        try expr.*.accessors.?.append(token_slice);
+                    }
+                },
                 else => keep_token = true,
             },
-            else => return error.UnexpectedState;
+            .ConsumeMacroExprArgs => {
+                // var isBatch = false;
+                if (self.macro_ptr) |_| {
+                    var args = self.zomb_macro_value_stack.pop().ExprArgs;
+                    var expr = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].Expr;
+                    expr.*.Expr.args = args;
+                    // TODO: iterate through args - if `?` is found, this is a batch
+                } else {
+                    var args = self.zomb_value_stack.pop().ExprArgs;
+                    var expr = &self.zomb_value_stack.items[self.zomb_value_stack.items.len - 1].Expr;
+                    expr.*.args = args;
+                    // TODO: iterate through args - if `?` is found, this is a batch
+                }
+                // TODO: if `isBatch == true` go to new stage to wait for `%`
+                keep_token = true;
+            },
+            .MacroExprEval => {
+                if (self.macro_ptr) |_| {
+                    var expr = self.zomb_macro_value_stack.pop().Expr;
+                    var list = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].List.ExprList;
+                    try list.append(expr);
+                } else {
+                    var expr = self.zomb_value_stack.pop().Expr;
+                    var value = try self.evaluateMacroExpr(&out_arena.allocator, expr);
+                    try self.zomb_value_stack.append(.{ .Value = value });
+                }
+                keep_token = true;
+            },
+
+            // Macro Expression Arguments -- TODO
+
+            else => return error.UnexpectedState; // TODO: might be able to remove this
         }
         // transition to the next state
         try self.state_machine.transition(self.token.?);

@@ -7,36 +7,53 @@ const StackElemWidth = u4;
 const STACK_SHIFT = @bitSizeOf(StackElemWidth);
 pub const MAX_STACK_SIZE = @bitSizeOf(StackWidth) / STACK_SHIFT; // add more stacks if we need more?
 
-pub const State = enum {
-    Decl,
-    MacroDecl,
-    KvPair,
-    Object,
-    Array,
-    MacroExpr,
-    MacroExprArgs,
+const StackState = enum(StackElemWidth) {
+    ObjectBegin,
+    ArrayBegin,
+    MacroExprKey,
+    MacroExprArgsBegin,
     Value,
+};
 
-    // ---
-
+const NonStackState = enum {
+    Decl,
     Key,
     Equals,
-    ObjectBegin,
-    ObjectConsume,
-    ObjectEnd,
-    ArrayBegin,
-    ArrayConsume,
-    ArrayEnd,
     ValueConcat,
+
+    ConsumeObjectEntry,
+    ObjectEnd,
+
+    ConsumeArrayItem,
+    ArrayEnd,
+
+    MacroDeclKey,
+    MacroDeclOptionalParams,
+    MacroDeclParams,
+
+    MacroExprOptionalArgs,
+    MacroExprOptionalAccessors,
+    MacroExprAccessors,
+    ConsumeMacroExprArgs,
+    MacroExprEval,
+
+    ConsumeMacroExprArg,
+    MacroExprArgsEnd,
 };
 
-pub const StateStackElem = enum(StackElemWidth) {
-    object,
-    array,
-    macro_expr,
-    macro_expr_args,
-    value,
-};
+pub const State = @Type(blk: {
+    const fields = @typeInfo(StackState).Enum.fields ++ @typeInfo(NonStackState).Enum.fields;
+
+    break :blk .{
+        .Enum = .{
+            .layout = .Auto,
+            .tag_type = std.math.IntFittingRange(0, fields.len - 1),
+            .decls = &[_]std.builtin.TypeInfo.Declaration{},
+            .fields = fields,
+            .is_exhaustive = true,
+        },
+    };
+});
 
 pub const StateMachine = struct {
     const Self = @This();
@@ -48,60 +65,46 @@ pub const StateMachine = struct {
     stack: StackWidth = 0,
     stack_size: u8 = 0,
 
-    pub fn push(self: *Self, stack_elem_: StateStackElem) !void {
+    pub fn push(self: *Self, state_: StackState) !void {
         if (self.stack_size > MAX_STACK_SIZE) {
             return error.TooManyStateStackPushes;
         }
-        self.stack <<= STACK_SHIFT;
-        self.stack |= @enumToInt(stack_elem_);
-        self.stack_size += 1;
-    }
-
-    pub fn push2(self: *Self, state_: State) !void {
-        if (self.stack_size > MAX_STACK_SIZE) {
-            return error.TooManyStateStackPushes;
-        }
-        const stack_elem: StackElemWidth = switch (state_) {
-            .Object => 0,
-            .Array => 1,
-            .MacroExpr => 2,
-            .MacroExprArgs => 3,
-            .Value => 4,
-            else => return error.UnexpectedStatePushed, // TODO: also log an error
-        };
         // update stack
         self.stack <<= STACK_SHIFT;
-        self.stack |= stack_elem;
+        self.stack |= @enumToInt(state_);
         self.stack_size += 1;
         // update state
-        self.state = state_;
-        self.stage = 0;
+        self.state = @intToEnum(State, @enumToInt(state_));
     }
 
-    pub fn pop(self: *Self) !StateStackElem {
-        if (self.top()) |s| {
-            self.stack >>= STACK_SHIFT;
-            self.stack_size -= 1;
-            return s;
-        }
-        return error.TooManyStateStackPops;
-    }
-
-    pub fn pop2(self: *Self) !State {
-        if (self.top2()) |s| {
+    pub fn pop(self: *Self) !void {
+        if (self.top()) |_| {
             // update stack
             self.stack >>= STACK_SHIFT;
             self.stack_size -= 1;
             // update state
-
+            if (self.top()) |state| {
+                // we always pop back to the corresponding consumption state
+                self.state = switch (state) {
+                    .ObjectBegin => .ConsumeObjectEntry,
+                    .ArrayBegin => .ConsumeArrayItem,
+                    .MacroExprKey => .ConsumeMacroExprArgs,
+                    .MacroExprArgsBegin => .ConsumeMacroExprArg,
+                    .Value => .Value,
+                };
+            } else {
+                self.state = .Decl;
+            }
+        } else {
+            return error.TooManyStateStackPops;
         }
     }
 
-    pub fn top(self: Self) ?StateStackElem {
+    pub fn top(self: Self) ?State {
         if (self.stack_size == 0) {
             return null;
         }
-        return @intToEnum(StateStackElem, self.stack & 0b1111);
+        return @intToEnum(State, self.stack & 0b1111);
     }
 
     /// Transition the state machine to the next state. This will catch all the
@@ -109,10 +112,30 @@ pub const StateMachine = struct {
     pub fn transition(self: *Self, token_: TokenType) !void {
         switch (self.state) {
             .Decl => self.state = switch (token_) {
-                .MacroKey => .MacroDecl,
+                .MacroKey => .MacroDeclKey,
                 .String => .Key,
                 else => return error.UnexpectedDeclToken,
             },
+            .Equals => switch (token_) {
+                .Equals => try self.push(.Value),
+                else => return error.UnexpectedEqualsToken,
+            },
+            .Value => switch (token_) {
+                .String, .RawString, .MacroParamKey => self.state = .ValueConcat,
+                .MacroKey => try self.push(.MacroExprKey),
+                .OpenCurly => try self.push(.ObjectBegin),
+                .OpenSquare => try self.push(.ArrayBegin),
+                .CloseSquare => {
+                    try self.pop();
+                    self.state = .ArrayEnd;
+                },
+            },
+            .ValueConcat => switch (token_) {
+                .Plus, .RawString => .Value,
+                else => try self.pop(),
+            },
+
+            // Object
             .ObjectBegin => self.state = switch (token_) {
                 .OpenCurly => .Key,
                 // TODO: maybe we should handle the empty object case here instead of in the .Key state?
@@ -123,47 +146,80 @@ pub const StateMachine = struct {
                 .CloseCurly => .ObjectEnd, // TODO: stage 2 - maybe we don't handle empty objects this way anymore?
                 else => return error.UnexpectedKeyToken,
             },
-            .Equals => switch (token_) {
-                .Equals => try self.push(.Value),
-                else => return error.UnexpectedEqualsToken,
-            },
-            .ObjectConsume => self.state = .ObjectEnd, // TODO: is this even necessary?
+            .ConsumeObjectEntry => self.state = .ObjectEnd, // TODO: is this even necessary?
             .ObjectEnd => switch (token_) {
                 .String => self.state = .Key,
-                .CloseCurly => _ = try self.pop(),
+                .CloseCurly => try self.pop(),
                 else => return error.UnexpectedObjectEndToken,
             },
+
+            // Array
             .ArrayBegin => switch (token_) {
                 .OpenSquare => try self.push(.Value),
                 else => return error.UnexpectedArrayBeginToken,
             },
-            .ArrayConsume => self.state = .ArrayEnd,
+            .ConsumeArrayItem => self.state = .ArrayEnd, // TODO: is this even necessary
             .ArrayEnd => switch (token_) {
-                .CloseSquare => _ = try self.pop(),
-                else => return error.UnexpectedArrayEndToken,
+                .CloseSquare => try self.pop(),
+                else => try self.push(.Value), // TODO: maybe do this in the .ConsumeArrayItem state?
             },
-            .Value => switch (token_) {
-                .String, .RawString, .MacroParamKey => self.state = .ValueConcat,
-                .MacroKey => try self.push(.MacroExpr),
-                .OpenCurly => try self.push(.ObjectBegin),
-                .OpenSquare => try self.push(.ArrayBegin),
-                .CloseSquare => {
-                    _ = try self.pop();
-                    self.state = .ArrayEnd;
-                },
+
+            // Macro Decl
+            .MacroDeclKey => self.state = switch (token_) {
+                .MacroKey => .MacroDeclOptionalParams,
+                else => return error.UnexpectedMacroDeclKeyToken,
             },
-            .ValueConcat => switch (token_) {
-                .Plus, .RawString => .Value,
-                else => _ = try self.pop(),
-            }
+            .MacroDeclOptionalParams => switch (token_) {
+                .OpenParen => self.state = .MacroDeclParams,
+                .Equals => try self.push(.Value),
+                else => return error.UnexpectedMacroDeclOptionalParmasToken,
+            },
+            .MacroDeclParams => switch (token_) {
+                .String => {}, // stay in this state
+                .CloseParen => self.state = .Equals,
+                else => return error.UnexpectedMacroDeclParamsToken,
+            },
+
+            // Macro Expr
+            .MacroExprKey => self.state = switch (token_) {
+                .MacroKey => .MacroExprOptionalArgs,
+                else => return error.UnexpectedMacroExprKeyToken,
+            },
+            .MacroExprOptionalArgs => switch (token_) {
+                .MacroAccessor => self.state = .MacroExprOptionalAccessors,
+                .OpenParen => try self.push(.MacroExprArgsBegin),
+                else => self.state = .MacroExprEval,
+            },
+            .MacroExprOptionalAccessors => self.state = switch (token_) {
+                .MacroAccessor => .MacroExprAccessors,
+                else => .MacroExprEval,
+            },
+            .MacroExprAccessors => switch (token_) {
+                .MacroAccessor => {}, // stay here
+                else => self.state = .MacroExprEval,
+            },
+            .ConsumeMacroExprArgs => self.state = .MacroExprOptionalAccessors,
+            .MacroExprEval => try self.pop(),
+
+            // Macro Expr Args
+            .MacroExprArgsBegin => switch (token_) {
+                .OpenParen => try self.push(.Value),
+                else => return error.UnexpectedMacroExprArgsBeginToken,
+            },
+            .ConsumeMacroExprArg => self.state = .MacroExprArgsEnd,
+            .MacroExprArgsEnd => switch (token_) {
+                .CloseParen => try self.pop(),
+                else => try self.push(.Value),
+            },
         }
     }
 };
 
 test "temp" {
-    const state = State.Object;
+    const state = StackState.ObjectBegin;
     var sm = StateMachine{};
-    try sm.push2(state);
-    try testing.expectEqual(state, sm.top2().?);
-    try testing.expectEqual(state, try sm.pop2());
+    try sm.push(state);
+    try testing.expectEqual(@intToEnum(State, @enumToInt(state)), sm.top().?);
+    try sm.pop();
+    try testing.expect(sm.top() == null);
 }
