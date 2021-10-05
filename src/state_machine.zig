@@ -3,7 +3,7 @@ const TokenType = @import("token.zig").TokenType;
 const testing = std.testing;
 
 const StackWidth = u128;
-const StackElemWidth = u4;
+const StackElemWidth = u3;
 const STACK_SHIFT = @bitSizeOf(StackElemWidth);
 pub const MAX_STACK_SIZE = @bitSizeOf(StackWidth) / STACK_SHIFT; // add more stacks if we need more?
 
@@ -12,11 +12,11 @@ const StackState = enum(StackElemWidth) {
     ArrayBegin,
     MacroExprKey,
     MacroExprArgsBegin,
-    Value,
+    Value, // = 0b100
 };
 
-const NonStackState = enum {
-    Decl,
+const NonStackState = enum(u5) { // we need 5 bits to represent 18 values
+    Decl = @typeInfo(StackState).Enum.fields[@typeInfo(StackState).Enum.fields.len - 1].value + 1,
     Key,
     Equals,
     ValueConcat,
@@ -59,7 +59,6 @@ pub const StateMachine = struct {
     const Self = @This();
 
     state: State = .Decl,
-    stage: u8 = 0,
 
     // NOTE: the following bit-stack setup is based on zig/lib/std/json.zig
     stack: StackWidth = 0,
@@ -91,6 +90,7 @@ pub const StateMachine = struct {
                     .MacroExprKey => .ConsumeMacroExprArgs,
                     .MacroExprArgsBegin => .ConsumeMacroExprArg,
                     .Value => .Value,
+                    else => return error.UnexpectedStackState,
                 };
             } else {
                 self.state = .Decl;
@@ -106,6 +106,10 @@ pub const StateMachine = struct {
         }
         return @intToEnum(State, self.stack & 0b1111);
     }
+
+    // fn stateStackHasMacros(self: Self) bool {
+    //     return (self.stack & 0x2222_2222_2222_2222_2222_2222_2222_2222) > 0;
+    // }
 
     /// Transition the state machine to the next state. This will catch all the
     /// expected token type errors.
@@ -129,9 +133,10 @@ pub const StateMachine = struct {
                     try self.pop();
                     self.state = .ArrayEnd;
                 },
+                else => return error.UnexpectedValueToken,
             },
             .ValueConcat => switch (token_) {
-                .Plus, .RawString => .Value,
+                .Plus, .RawString => self.state = .Value,
                 else => try self.pop(),
             },
 
@@ -222,4 +227,35 @@ test "temp" {
     try testing.expectEqual(@intToEnum(State, @enumToInt(state)), sm.top().?);
     try sm.pop();
     try testing.expect(sm.top() == null);
+}
+
+
+test "general stack logic" {
+    var stack: u128 = 0;
+    var stack_size: u8 = 0;
+    const stack_size_limit: u8 = 64;
+    const shift = 2;
+
+    try testing.expectEqual(@as(u128, 0x0000_0000_0000_0000_0000_0000_0000_0000), stack);
+
+    // This loop should push 0, 1, 2, and 3 in sequence until the max stack size
+    // has been reached.
+    var t: u8 = 0;
+    while (stack_size < stack_size_limit) {
+        stack <<= shift;
+        stack |= t;
+        stack_size += 1;
+        t = (t + 1) % 4;
+        if (stack_size != stack_size_limit) {
+            try testing.expect(@as(u128, 0x1B1B_1B1B_1B1B_1B1B_1B1B_1B1B_1B1B_1B1B) != stack);
+        }
+    }
+    try testing.expectEqual(@as(u128, 0x1B1B_1B1B_1B1B_1B1B_1B1B_1B1B_1B1B_1B1B), stack);
+    while (stack_size > 0) {
+        t = if (t == 0) 3 else (t - 1);
+        try testing.expectEqual(@as(u128, t), (stack & 0b11));
+        stack >>= shift;
+        stack_size -= 1;
+    }
+    try testing.expectEqual(@as(u128, 0x0000_0000_0000_0000_0000_0000_0000_0000), stack);
 }
