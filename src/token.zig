@@ -100,7 +100,7 @@ pub const Token = struct {
     line: usize = undefined,
 
     /// The type of this token (duh)
-    token_type: TokenType = TokenType.None,
+    token_type: TokenType = .None,
 
     /// Whether this token is a valid ZOMB token.
     is_valid: bool = false,

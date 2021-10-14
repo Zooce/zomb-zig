@@ -3,7 +3,7 @@ const TokenType = @import("token.zig").TokenType;
 const testing = std.testing;
 
 const StackWidth = u128;
-const StackElemWidth = u3;
+const StackElemWidth = u4; // TODO: we have an extra bit here so it's easier to debug - change this to u3 later
 const STACK_SHIFT = @bitSizeOf(StackElemWidth);
 pub const MAX_STACK_SIZE = @bitSizeOf(StackWidth) / STACK_SHIFT; // add more stacks if we need more?
 
@@ -15,8 +15,8 @@ const StackState = enum(StackElemWidth) {
     Value, // = 0b100
 };
 
-const NonStackState = enum(u5) { // we need 5 bits to represent 18 values
-    Decl = @typeInfo(StackState).Enum.fields[@typeInfo(StackState).Enum.fields.len - 1].value + 1,
+const NonStackState = enum(u5) { // we need 5 bits to represent these 18 values
+    Decl = STACK_SHIFT + 1,
     Key,
     Equals,
     ValueConcat,
@@ -90,7 +90,6 @@ pub const StateMachine = struct {
                     .MacroExprKey => .ConsumeMacroExprArgs,
                     .MacroExprArgsBegin => .ConsumeMacroExprArg,
                     .Value => .Value,
-                    else => return error.UnexpectedStackState,
                 };
             } else {
                 self.state = .Decl;
@@ -100,11 +99,20 @@ pub const StateMachine = struct {
         }
     }
 
-    pub fn top(self: Self) ?State {
+    pub fn top(self: Self) ?StackState {
         if (self.stack_size == 0) {
             return null;
         }
-        return @intToEnum(State, self.stack & 0b1111);
+        return @intToEnum(StackState, self.stack & 0b1111);
+    }
+
+    pub fn log(self: Self) void {
+        std.debug.print(
+            \\----[State Machine]----
+            \\State = {}
+            \\Stack = 0x{X:0>32} | {}
+            , .{ self.state, self.stack, self.stack_size }
+        );
     }
 
     // fn stateStackHasMacros(self: Self) bool {
@@ -121,9 +129,11 @@ pub const StateMachine = struct {
                 else => return error.UnexpectedDeclToken,
             },
             .Equals => switch (token_) {
-                .Equals => try self.push(.Value),
+                .Equals => try self.push(.Value), // TODO: go to ValueEnter
                 else => return error.UnexpectedEqualsToken,
             },
+            // TODO: consider adding a ValueEnter state where we can push the appropriate list to the stack?
+            // .ValueEnter => self.state = .Value,
             .Value => switch (token_) {
                 .String, .RawString, .MacroParamKey => self.state = .ValueConcat,
                 .MacroKey => try self.push(.MacroExprKey),

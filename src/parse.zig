@@ -86,7 +86,7 @@ pub const ZombMacroExpr = struct {
 
 const ExprArgType = union(enum) {
     Value: ZombValue,
-    BatchPlaceholder: void, // TODO: maybe this should be an index or even the paramter name
+    BatchPlaceholder: void, // TODO: maybe this should be an index or even the parameter name
 };
 
 const ZombStackType = union(enum) {
@@ -107,7 +107,7 @@ const ZombMacroDeclExpr = struct {
 
 const DeclExprArgType = union(enum) {
     Value: ZombMacroValue,
-    BatchPlaceholder: void, // TODO: maybe this should be an index or even the paramter name
+    BatchPlaceholder: void, // TODO: maybe this should be an index or even the parameter name
 };
 
 const ZombMacroObjectValue = union(enum) {
@@ -724,8 +724,8 @@ pub const Parser = struct {
 
         var done = false;
         while (!done) {
+            try self.log();
             try self.step(&out_arena);
-            self.DEBUG_ME(self.token);
             done = self.token != null;
         }
 
@@ -790,6 +790,12 @@ pub const Parser = struct {
                 keep_token = true;
             },
             .ObjectBegin => {
+                // var obj = if (self.macro_ptr) |_| {
+                //     .{ .Val = .{ .Object = std.StringArrayHashMap(ConcatList).init(&self.arena.allocator) } }
+                // } else {
+                //     .{ .Val = .{ .Value = .{ .Object = std.StringArrayHashMap(ZValue).init(&out_arena_.allocator) } } }
+                // };
+                // try self.stack.append(obj);
                 if (self.macro_ptr) |_| {
                     try self.zomb_macro_value_stack.append(.{ .Object = .{ .Object = ZombMacroValueMap.init(&self.arena.allocator) } });
                 } else {
@@ -797,6 +803,7 @@ pub const Parser = struct {
                 }
             },
             .Key => {
+                // self.stack.append(.{ .Key = token_slice });
                 const key = .{ .Key = token_slice };
                 if (self.macro_ptr) |_| {
                     try self.zomb_macro_value_stack.append(key);
@@ -804,37 +811,61 @@ pub const Parser = struct {
                     try self.zomb_value_stack.append(key);
                 }
             },
-            .Equals => {}, // TODO: remove this since we don't need to do anything here?
+            .Equals => {
+                // try self.stack.append(.{ .List = std.ArrayList(ConcatItem).init(&self.arena.allocator) });
+            },
             .ConsumeObjectEntry => {
-                // const val = self.stack.pop().List;
+                // const concat_list = self.stack.pop().Val.List;
                 // const key = self.stack.pop().Key;
-                // var obj_ptr = &self.stack.items[self.stack.items.len - 1];
                 if (self.macro_ptr) |_| {
-                    // obj_ptr.*.Obj.put(key, val);
+                    // var obj_ptr = &self.stack.items[self.stack.items.len - 1].Val.Object;
+                    // try obj_ptr.*.put(key, concat_list);
                     const val = self.zomb_macro_value_stack.pop().List;
                     const key = self.zomb_macro_value_stack.pop().Key;
                     var object_ptr = try self.macroStackTop();
                     try object_ptr.*.Object.Object.put(key, val);
                 } else {
-                    // create ... ah...the dual allocator thing is difficult...maybe just give the caller the macros as well and use the `out_arena` for everything?
-                    // var obj = std.StringArrayHashMap(ZombValue).init(&out_arena_.allocator);
-                    // try obj.put(key, val.toZombValue());
+                    // TODO: convert concat_list to ZombValue using the out_arena_ allocator
+                    // defer concat_list.deinit(); // don't need to keep the concat list for non-macro values
+                    // const val = try reduceToZValue(concat_list, &out_arena_.allocator);
+                    // var obj_ptr = &self.stack.items[self.stack.items.len - 1].Val.Value.Object;
+                    // try obj_ptr.*.put(key, val);
                     try self.stackConsumeKvPair();
                 }
                 keep_token = true;
             },
             .ObjectEnd => switch (self.token.?.token_type) {
                 .String => keep_token = true,
-                .CloseCurly => if (self.macro_ptr) |_| {
-                    const object = self.zomb_macro_value_stack.pop().Object;
-                    var list_ptr = try self.macroStackTop();
-                    try list_ptr.*.List.ObjectList.append(object);
+                .CloseCurly => {
+                    // TODO: update for single stack design
+                    if (self.macro_ptr) |_| {
+                        // TODO: the object on the top of the stack needs to be placed into the concat list
+                        // const object = self.stack.pop().Val.Object;
+                        // var concat_list = &self.stack.items[self.stack.items.len - 1].Val.List;
+                        // try concat_list.*.append(object);
+                        const object = self.zomb_macro_value_stack.pop().Object;
+                        var list_ptr = try self.macroStackTop();
+                        try list_ptr.*.List.ObjectList.append(object);
+                    }
+                    else {
+                        // TODO: we don't need the parse value type any more
+                        // const object = self.stack.pop().Val;
+                        // _ = object;
+                    }
                 },
                 else => {},
             },
 
             // Arrays
             .ArrayBegin => {
+                // TODO: store the current allocator (i.e. we shouldn't need to check for self.macro_ptr all the time)
+                // var alloc_ptr = if (self.macro_ptr) |_| {
+                //     &self.arena.allocator
+                // } else {
+                //     &out_arena_.allocator
+                // };
+                // var concat_list = &self.stack.items[self.stack.items.len - 1].ConcatList;
+                // try concat_list.append(.{ .Value = .{ .Array = std.ArrayList(ZValue).init(alloc_ptr) } });
                 if (self.macro_ptr) |_| {
                     try self.zomb_macro_value_stack.append(.{ .Array = .{ .Array = ZombMacroValueArray.init(&self.arena.allocator) } });
                 } else {
@@ -842,6 +873,7 @@ pub const Parser = struct {
                 }
             },
             .ConsumeArrayItem => {
+                // TODO: update for single stack design
                 if (self.macro_ptr) |_| {
                     const val = self.zomb_macro_value_stack.pop();
                     var array_ptr = try self.macroStackTop();
@@ -854,16 +886,21 @@ pub const Parser = struct {
                 keep_token = true;
             },
             .ArrayEnd => switch (self.token.?.token_type) {
-                .CloseSquare => if (self.macro_ptr) |_| {
-                    const array = self.zomb_macro_value_stack.pop().Array;
-                    var list_ptr = try self.macroStackTop();
-                    try list_ptr.*.List.ArrayList.append(array);
+                .CloseSquare => {
+                    // TODO: update for single stack design
+                    if (self.macro_ptr) |_| {
+                        const array = self.zomb_macro_value_stack.pop().Array;
+                        var list_ptr = try self.macroStackTop();
+                        try list_ptr.*.List.ArrayList.append(array);
+                    }
                 },
                 else => keep_token = true,
             },
 
             .Value => switch (self.token.?.token_type) {
+                // var concat_list = &self.stack.items[self.stack.items.len - 1].ConcatList;
                 .String, .RawString => {
+                    // try concat_list.append(.{ .Value = .{ .String = token_slice } });
                     if (self.macro_ptr) |_| {
                         // top of the stack should be a String
                         var top = try self.macroStackTop();
@@ -915,6 +952,7 @@ pub const Parser = struct {
                         } else {
                             return error.InvalidParameterUse;
                         }
+                        // try concat_list.append(.{ .Param = token_slice });
                         var top = try self.macroStackTop();
                         switch (top.*) {
                             .List => |*list| switch (list.*) { // TODO: this might need some work -- I think there's a bug here...
@@ -935,6 +973,7 @@ pub const Parser = struct {
                     }
                 },
                 .MacroKey => {
+                    // TODO: nothing to add to the stack, just keep the token
                     if (self.macro_ptr) |_| {
                         var top = try self.macroStackTop();
                         switch (top.*) {
@@ -957,6 +996,7 @@ pub const Parser = struct {
                     keep_token = true;
                 },
                 .OpenCurly => {
+                    // TODO: nothing to add to the stack, just keep the token
                     if (self.macro_ptr) |_| {
                         var top = try self.macroStackTop();
                         switch (top.*) {
@@ -980,6 +1020,7 @@ pub const Parser = struct {
                     keep_token = true;
                 },
                 .OpenSquare => {
+                    // TODO: nothing to add to the stack, just keep the token
                     if (self.macro_ptr) |_| {
                         var top = try self.macroStackTop();
                         switch (top.*) {
@@ -1002,7 +1043,7 @@ pub const Parser = struct {
                     }
                     keep_token = true;
                 },
-                .CloseSquare => keep_token = true,
+                .CloseSquare => keep_token = true, // empty array
                 else => {},
             },
             .ValueConcat => if (self.token.?.token_type != .Plus) {
@@ -1010,7 +1051,7 @@ pub const Parser = struct {
             },
 
             // Macro Declaration
-            .MacroDeclKey => {
+            .MacroDeclKey => { // TODO: combine this with the Key state?
                 var res = try self.macro_map.getOrPut(token_slice);
                 if (res.found_existing) return error.DuplicateMacroName;
                 res.value_ptr.* = ZombMacro{};
@@ -1028,11 +1069,13 @@ pub const Parser = struct {
                 .CloseParen => if (self.macro_ptr.?.*.params.?.count() == 0) {
                     return error.EmptyMacroDeclParams;
                 },
-                else => {},
+                else => {}, // state machine will catch unexpected token errors
             },
 
             // Macro Expression
             .MacroExprKey => {
+                // var concat_list = &self.stack.items[self.stack.items.len - 1].ConcatList;
+                // try concat_list.append(.{ .Expr = .{ .key = token_slice } });
                 if (self.macro_ptr) |_| {
                     try self.zomb_macro_value_stack.append(.{ .Expr = .{ .Expr = ZombMacroDeclExpr{ .key = token_slice } } });
                 } else {
@@ -1042,6 +1085,10 @@ pub const Parser = struct {
             .MacroExprOptionalArgs => keep_token = true,
             .MacroExprOptionalAccessors => {
                 if (self.token.?.token_type == .MacroAccessor) {
+                    // var expr = &self.stack.items[self.stack.items.len - 1].Expr;
+                    // if (expr.*.accessors == null) {
+                    //     expr.*.accessors = std.ArrayList([]const u8).init(&self.arena.allocator);
+                    // }
                     if (self.macro_ptr) |_| {
                         var expr = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].Expr.Expr;
                         if (expr.*.accessors == null) {
@@ -1058,6 +1105,8 @@ pub const Parser = struct {
             },
             .MacroExprAccessors => switch (self.token.?.token_type) {
                 .MacroAccessor => {
+                    // var expr = &self.stack.items[self.stack.items.len - 1].Expr;
+                    // try expr.*.accessors.?.append(token_slice);
                     if (self.macro_ptr) |_| {
                         var expr = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].Expr.Expr;
                         try expr.*.accessors.?.append(token_slice);
@@ -1069,6 +1118,8 @@ pub const Parser = struct {
                 else => keep_token = true,
             },
             .ConsumeMacroExprArgs => {
+                // TODO: update for single stack design
+                // TODO: update for expression batching
                 // var isBatch = false;
                 if (self.macro_ptr) |_| {
                     var args = self.zomb_macro_value_stack.pop().ExprArgs;
@@ -1085,11 +1136,16 @@ pub const Parser = struct {
                 keep_token = true;
             },
             .MacroExprEval => {
+                // var expr = self.stack.pop().Expr;
                 if (self.macro_ptr) |_| {
+                    // var concat_list = &self.stack.items[self.stack.items.len - 1].ConcatList;
+                    // try concat_list.append(expr);
                     var expr = self.zomb_macro_value_stack.pop().Expr;
                     var list = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].List.ExprList;
                     try list.append(expr);
                 } else {
+                    // var value = try self.evaluateMacroExpr(&out_arena_.allocator, expr);
+                    // try self.stack.append(.{ .Value = value });
                     var expr = self.zomb_value_stack.pop().Expr;
                     var value = try self.evaluateMacroExpr(&out_arena_.allocator, expr);
                     try self.zomb_value_stack.append(.{ .Value = value });
@@ -1099,6 +1155,7 @@ pub const Parser = struct {
 
             // Macro Expression Arguments
             .MacroExprArgsBegin => {
+                // try self.stack.append(.{ .ExprArgList = std.ArrayList(ExprArgType).init(&self.arena.allocator) });
                 if (self.macro_ptr) |_| {
                     try self.zomb_macro_value_stack.append(.{ .ExprArgs = std.ArrayList(DeclExprArgType).init(&self.arena.allocator) });
                 } else {
@@ -1106,6 +1163,9 @@ pub const Parser = struct {
                 }
             },
             .ConsumeMacroExprArg => {
+                // const arg = self.stack.pop().ExprArg;
+                // var arg_list = &self.stack.items[self.stack.items.len - 1].ExprArgList;
+                // try arg_list.append(arg);
                 if (self.macro_ptr) |_| {
                     const val = self.zomb_macro_value_stack.pop().ExprArg;
                     var args = &self.zomb_macro_value_stack.items[self.zomb_macro_value_stack.items.len - 1].ExprArgs;
@@ -1164,70 +1224,44 @@ pub const Parser = struct {
         return value;
     }
 
-    /// This is for prototyping only - do not commit this!
-    fn DEBUG_ME(self: Self, token: ?Token) void {
-        if (true or token == null) {
+    // TODO: This is for prototyping only -- remove before release
+    pub fn log(self: Self) !void {
+        if (self.token == null) {
             return;
         }
-        std.log.err(
-            \\
-            \\State       : {} (stage = {})
-            \\State Stack : 0x{X:0>32} (size = {})
-            \\Type        : {} (line = {})
-            \\Token       : {s}
-            \\Stack Len   : {}
+        self.state_machine.log();
+        std.debug.print(
+            \\----[Token]----
+            \\Token = {} | {s} | {}
         , .{
-            self.state,
-            self.state_stage,
-            self.stack,
-            self.stack_size,
-            token.token_type,
-            token.line,
-            token.slice(self.input),
-            self.zomb_value_stack.items.len,
+            if (self.token) |t| t.token_type else .None,
+            if (self.token) |t| try t.slice(self.input) else "",
+            if (self.token) |t| t.line else 0,
         });
-        if (self.macro_ptr) |_| {
-            std.log.err("Macro Value Stack:", .{});
-            for (self.zomb_macro_value_stack.items) |item| switch (item) {
-                .List => |list| switch (list) {
-                    .ObjectList => |obj_list| std.log.err("ObjectList (len = {})", .{obj_list.items.len}),
-                    .ArrayList => |arr_list| std.log.err("ArrayList (len = {})", .{arr_list.items.len}),
-                    .StringList => |str_list| std.log.err("StringList (len = {})", .{str_list.items.len}),
-                    .ExprList => |expr_list| std.log.err("ExprList (len = {})", .{expr_list.items.len}),
-                    .ParameterList => |param_list| std.log.err("ParameterList (len = {})", .{param_list.items.len}),
-                },
-                .Object => |obj| switch (obj) {
-                    .Object => |o| std.log.err("Object (len = {})", .{o.count()}),
-                    .Parameter => |p| std.log.err("Parameter (obj) ({s})", .{p}),
-                    .Expr => |e| std.log.err("Expr (obj) (key = {s})", .{e.key}),
-                },
-                .Array => |arr| switch (arr) {
-                    .Array => |a| std.log.err("Array (len = {})", .{a.items.len}),
-                    .Parameter => |p| std.log.err("Parameter (arr) ({s})", .{p}),
-                    .Expr => |e| std.log.err("Expr (arr) (key = {s})", .{e.key}),
-                },
-                .Expr => |expr| switch (expr) {
-                    .Expr => |e| std.log.err("Expr (obj) (key = {s})", .{e.key}),
-                    .Parameter => |p| std.log.err("Parameter (expr) ({s})", .{p}),
-                },
-                .ExprArgs => |x| std.log.err("ExprArgs (len = {})", .{x.items.len}),
-                .Key => |k| std.log.err("Key ({s})", .{k}),
-                .Empty => std.log.err("Empty", .{}),
-            };
-        } else {
-            std.log.err("Value Stack:", .{});
-            for (self.zomb_value_stack.items) |item| switch (item) {
-                .Value => |elem| switch (elem) {
-                    .Object => |obj| std.log.err("Object (len = {})", .{obj.count()}),
-                    .Array => |arr| std.log.err("Array (len = {})", .{arr.items.len}),
-                    .String => |str| std.log.err("String ({s})", .{str.items}),
-                },
-                .Key => |key| std.log.err("Key ({s})", .{key}),
-                .Expr => |e| std.log.err("Expr (key = {s})", .{e.key}),
-                .ExprArgs => |x| std.log.err("ExprArgs (len = {})", .{x.items.len}),
-            };
-        }
-        std.log.err("\n\n", .{});
+        std.debug.print(
+            \\----[Parse Stack]----
+            , .{}
+        );
+        // for (self.stack.items) |stack_elem| {
+        //     switch (stack_elem) {
+        //         .List => |list| {
+        //             for (list) |item| {
+        //                 switch (item) {
+        //                     .MVal => |m| switch (m) {
+        //                         .Object => |obj| {
+        //                             // TODO: iterate the object entries and print them out
+        //                         },
+        //                         .Array => |arr| {
+        //                             // TODO: iterate the array items and print them out
+        //                         },
+        //                         .String => |str|
+        //                     },
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+        std.debug.print("\n\n", .{});
     }
 };
 
