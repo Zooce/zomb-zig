@@ -113,8 +113,6 @@ pub const ConcatItem = union(enum) {
 };
 pub const ConcatList = std.ArrayList(ConcatItem);
 pub const ZMacro = struct {
-    const Self = @This();
-
     parameters: ?std.ArrayList([]const u8),
     value: ConcatList,
 };
@@ -246,15 +244,21 @@ pub const StackElem = union(enum) {
     CExprArgList: std.ArrayList(ConcatList),
 };
 
-test "stack" {
-    var stack = std.ArrayList(StackElem).init(std.testing.allocator);
-    defer stack.deinit();
-}
+//======================================================================================================================
+//======================================================================================================================
+//======================================================================================================================
+//
+//
+// TESTS
+//
+//
+//======================================================================================================================
+//======================================================================================================================
+//======================================================================================================================
 
 test "concat list of objects reduction - no macros" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var c_list = ConcatList.init(&arena.allocator);
 
     // object 0
     var obj_0 = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
@@ -269,6 +273,8 @@ test "concat list of objects reduction - no macros" {
     try obj_1.Object.putNoClobber("c", c_list_1);
 
     // fill in the concat list
+    // { a = b } + { c = d }
+    var c_list = ConcatList.init(&arena.allocator);
     try c_list.append(obj_0);
     try c_list.append(obj_1);
 
@@ -276,6 +282,7 @@ test "concat list of objects reduction - no macros" {
     const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
 
     // get the result
+    // { a = b, c = d }
     var result: ZValue = undefined;
     const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
     try std.testing.expect(did_reduce);
@@ -291,7 +298,6 @@ test "concat list of objects reduction - no macros" {
 test "concat list of arrays reduction - no macros" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var c_list = ConcatList.init(&arena.allocator);
 
     // array 0
     var arr_0 = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
@@ -306,6 +312,8 @@ test "concat list of arrays reduction - no macros" {
     try arr_1.Array.append(c_list_1);
 
     // fill in the concat list
+    // [ a ] + [ b ]
+    var c_list = ConcatList.init(&arena.allocator);
     try c_list.append(arr_0);
     try c_list.append(arr_1);
 
@@ -313,6 +321,7 @@ test "concat list of arrays reduction - no macros" {
     const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
 
     // get the result
+    // [ a, b ]
     var result: ZValue = undefined;
     const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
     try std.testing.expect(did_reduce);
@@ -326,15 +335,17 @@ test "concat list of arrays reduction - no macros" {
 test "concat list of strings reduction - no macros" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var c_list = ConcatList.init(&arena.allocator);
 
     // fill in the concat list
+    // "a" + "b"
+    var c_list = ConcatList.init(&arena.allocator);
     try c_list.append(.{ .String = "a" });
     try c_list.append(.{ .String = "b" });
 
     const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
 
     // get the result
+    // "ab"
     var result: ZValue = undefined;
     const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
     try std.testing.expect(did_reduce);
@@ -342,4 +353,39 @@ test "concat list of strings reduction - no macros" {
     // test the result
     try std.testing.expect(result == .String);
     try std.testing.expectEqualStrings("ab", result.String.items);
+}
+
+test "macro expression evaluation - no accessors no batching" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // macro
+    // $greet(name) = "Hello, " + %name + "!"
+    var value = ConcatList.init(&arena.allocator);
+    try value.append(.{ .String = "Hello, " });
+    try value.append(.{ .Parameter = "name" });
+    try value.append(.{ .String = "!" });
+    var parameters = std.ArrayList([]const u8).init(&arena.allocator);
+    try parameters.append("name");
+    const macro = ZMacro{ .parameters = parameters, .value = value };
+
+    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    try macros.putNoClobber("greet", macro);
+
+    // expression
+    var c_list = ConcatList.init(&arena.allocator);
+    try c_list.append(.{ .String = "Zooce" });
+    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    try args.putNoClobber("name", .{ .CList = c_list });
+    var expr = ZExpr{ .key = "greet", .args = args };
+
+    // evaluate the expression
+    var result: ZValue = undefined;
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    try std.testing.expect(did_evaluate);
+
+    // test the result
+    // "Hello, Zooce!"
+    try std.testing.expect(result == .String);
+    try std.testing.expectEqualStrings("Hello, Zooce!", result.String.items);
 }
