@@ -273,7 +273,7 @@ test "concat list of objects reduction - no macros" {
     try c_list.append(obj_1);
 
     // we need a macro map to call reduce() - we know it won't be used in this test, so just make an empty one
-    var ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
+    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
 
     // get the result
     var result: ZValue = undefined;
@@ -286,4 +286,60 @@ test "concat list of objects reduction - no macros" {
     const d = result.Object.get("c") orelse return error.KeyNotFound;
     try std.testing.expectEqualStrings("b", b.String.items);
     try std.testing.expectEqualStrings("d", d.String.items);
+}
+
+test "concat list of arrays reduction - no macros" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var c_list = ConcatList.init(&arena.allocator);
+
+    // array 0
+    var arr_0 = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
+    var c_list_0 = ConcatList.init(&arena.allocator);
+    try c_list_0.append(.{ .String = "a" });
+    try arr_0.Array.append(c_list_0);
+
+    // array 1
+    var arr_1 = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
+    var c_list_1 = ConcatList.init(&arena.allocator);
+    try c_list_1.append(.{ .String = "b" });
+    try arr_1.Array.append(c_list_1);
+
+    // fill in the concat list
+    try c_list.append(arr_0);
+    try c_list.append(arr_1);
+
+    // we need a macro map to call reduce() - we know it won't be used in this test, so just make an empty one
+    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
+
+    // get the result
+    var result: ZValue = undefined;
+    const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
+    try std.testing.expect(did_reduce);
+
+    // test the result
+    try std.testing.expect(result == .Array);
+    try std.testing.expectEqualStrings("a", result.Array.items[0].String.items);
+    try std.testing.expectEqualStrings("b", result.Array.items[1].String.items);
+}
+
+test "concat list of strings reduction - no macros" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var c_list = ConcatList.init(&arena.allocator);
+
+    // fill in the concat list
+    try c_list.append(.{ .String = "a" });
+    try c_list.append(.{ .String = "b" });
+
+    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
+
+    // get the result
+    var result: ZValue = undefined;
+    const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
+    try std.testing.expect(did_reduce);
+
+    // test the result
+    try std.testing.expect(result == .String);
+    try std.testing.expectEqualStrings("ab", result.String.items);
 }
