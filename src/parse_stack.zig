@@ -91,8 +91,7 @@ pub const ZExpr = struct {
         } else {
             const ctx = .{ .expr_args = self.args, .batch_args = null, .macros = macros_ };
             if (next_accessors) |acs| {
-                const accessors: ?[][]const u8 = if (acs.items.len > 1) acs.items[1..] else null;
-                return try reduce(allocator_, macro.value, result_, true, accessors, ctx);
+                return try reduce(allocator_, macro.value, result_, true, acs.items, ctx);
             } else {
                 _ = try reduce(allocator_, macro.value, result_, init_result_, null, ctx);
             }
@@ -377,7 +376,7 @@ test "macro expression evaluation - no accessors no batching" {
     try c_list.append(.{ .String = "Zooce" });
     var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
     try args.putNoClobber("name", .{ .CList = c_list });
-    var expr = ZExpr{ .key = "greet", .args = args };
+    const expr = ZExpr{ .key = "greet", .args = args };
 
     // evaluate the expression
     var result: ZValue = undefined;
@@ -389,3 +388,55 @@ test "macro expression evaluation - no accessors no batching" {
     try std.testing.expect(result == .String);
     try std.testing.expectEqualStrings("Hello, Zooce!", result.String.items);
 }
+
+test "macro expression evaluation - no batching" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // macro
+    // $color(alpha) = {
+    //     black = #000000 + %alpha
+    //     red = #ff0000 + %alpha
+    // }
+    var black_val = ConcatList.init(&arena.allocator);
+    try black_val.append(.{ .String = "#000000" });
+    try black_val.append(.{ .Parameter = "alpha" });
+    var red_val = ConcatList.init(&arena.allocator);
+    try red_val.append(.{ .String = "#ff0000" });
+    try red_val.append(.{ .Parameter = "alpha" });
+    var color_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    try color_obj.Object.putNoClobber("black", black_val);
+    try color_obj.Object.putNoClobber("red", red_val);
+    var color_val = ConcatList.init(&arena.allocator);
+    try color_val.append(color_obj);
+
+    var parameters = std.ArrayList([]const u8).init(&arena.allocator);
+    try parameters.append("alpha");
+    const macro = ZMacro{ .parameters = parameters, .value = color_val };
+
+    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    try macros.putNoClobber("color", macro);
+
+    // expression
+    var alpha = ConcatList.init(&arena.allocator);
+    try alpha.append(.{ .String = "ff" });
+    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    try args.putNoClobber("alpha", .{ .CList = alpha });
+    var accessors = std.ArrayList([]const u8).init(&arena.allocator);
+    try accessors.append("black");
+    const expr = ZExpr{ .key = "color", .args = args, .accessors = accessors };
+
+    // evaluate the expression
+    var result: ZValue = undefined;
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    try std.testing.expect(did_evaluate);
+
+    // test the result
+    // "#000000ff"
+    try std.testing.expect(result == .String);
+    try std.testing.expectEqualStrings("#000000ff", result.String.items);
+}
+
+// TODO: test "batched macro expression evaluation - no accessors" {}
+
+// TODO: test "batched macro expression evaluation" {}
