@@ -389,7 +389,7 @@ test "macro expression evaluation - no accessors no batching" {
     try std.testing.expectEqualStrings("Hello, Zooce!", result.String.items);
 }
 
-test "macro expression evaluation - no batching" {
+test "macro expression object single accessor evaluation - no batching" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -435,6 +435,54 @@ test "macro expression evaluation - no batching" {
     // "#000000ff"
     try std.testing.expect(result == .String);
     try std.testing.expectEqualStrings("#000000ff", result.String.items);
+}
+
+test "macro expression array single accessor evaluation - no batching" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // macro
+    // $jobs(name) = [
+    //     %name + " - dog walker"
+    //     %name + " - engineer"
+    // ]
+    var dog_walker_val = ConcatList.init(&arena.allocator);
+    try dog_walker_val.append(.{ .Parameter = "name" });
+    try dog_walker_val.append(.{ .String = " - dog walker" });
+    var engineer_val = ConcatList.init(&arena.allocator);
+    try engineer_val.append(.{ .Parameter = "name" });
+    try engineer_val.append(.{ .String = " - engineer" });
+    var jobs_obj = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
+    try jobs_obj.Array.append(dog_walker_val);
+    try jobs_obj.Array.append(engineer_val);
+    var jobs_val = ConcatList.init(&arena.allocator);
+    try jobs_val.append(jobs_obj);
+
+    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    try parameters.putNoClobber("name", null);
+    const macro = ZMacro{ .parameters = parameters, .value = jobs_val };
+
+    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    try macros.putNoClobber("jobs", macro);
+
+    // expression
+    var name = ConcatList.init(&arena.allocator);
+    try name.append(.{ .String = "Zooce" });
+    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    try args.putNoClobber("name", .{ .CList = name });
+    var accessors = std.ArrayList([]const u8).init(&arena.allocator);
+    try accessors.append("1");
+    const expr = ZExpr{ .key = "jobs", .args = args, .accessors = accessors };
+
+    // evaluate the expression
+    var result: ZValue = undefined;
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    try std.testing.expect(did_evaluate);
+
+    // test the result
+    // "Zooce - engineer"
+    try std.testing.expect(result == .String);
+    try std.testing.expectEqualStrings("Zooce - engineer", result.String.items);
 }
 
 // TODO: test "batched macro expression evaluation - no accessors" {}
