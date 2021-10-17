@@ -628,6 +628,59 @@ test "macro expression with default value evaluation - no accessors no batching"
     try std.testing.expectEqualStrings("Hello, Zooce!", result.String.items);
 }
 
-// TODO: test "batched macro expression evaluation - no accessors" {}
+test "batched macro expression evaluation - no accessors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // macro
+    // $color(alpha, beta) = #ff0000 + %alpha + %beta
+    var value = ConcatList.init(&arena.allocator);
+    try value.append(.{ .String = "#ff0000" });
+    try value.append(.{ .Parameter = "alpha" });
+    try value.append(.{ .Parameter = "beta" });
+
+    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    try parameters.putNoClobber("alpha", null);
+    try parameters.putNoClobber("beta", null);
+    const macro = ZMacro{ .parameters = parameters, .value = value };
+
+    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    try macros.putNoClobber("color", macro);
+
+    // expression
+    // $color(?, ff) % [
+    //     [ 07 ]
+    //     [ ff ]
+    // ]
+    var alpha1 = ConcatList.init(&arena.allocator);
+    try alpha1.append(.{ .String = "07" });
+    var alpha1_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    try alpha1_batch.append(alpha1);
+    var alpha2 = ConcatList.init(&arena.allocator);
+    try alpha2.append(.{ .String = "ff" });
+    var alpha2_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    try alpha2_batch.append(alpha2);
+    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(&arena.allocator);
+    try batch_args_list.append(alpha1_batch);
+    try batch_args_list.append(alpha2_batch);
+    var beta = ConcatList.init(&arena.allocator);
+    try beta.append(.{ .String = "ff" });
+    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    try args.putNoClobber("alpha", .BatchPlaceholder);
+    try args.putNoClobber("beta", .{ .CList = beta });
+    const expr = ZExpr{ .key = "color", .args = args, .batch_args_list = batch_args_list };
+
+    // evaluate the expression
+    var result: ZValue = undefined;
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    try std.testing.expect(did_evaluate);
+
+    // test the result
+    // [ "#ff000007ff", "#ff0000ffff" ]
+    try std.testing.expect(result == .Array);
+    try std.testing.expectEqual(@as(usize, 2), result.Array.items.len);
+    try std.testing.expectEqualStrings("#ff000007ff", result.Array.items[0].String.items);
+    try std.testing.expectEqualStrings("#ff0000ffff", result.Array.items[1].String.items);
+}
 
 // TODO: test "batched macro expression evaluation" {}
