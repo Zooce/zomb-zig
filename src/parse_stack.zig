@@ -46,14 +46,6 @@ pub const ZExpr = struct {
         )
         anyerror!bool
     {
-        // set up a temporary list to concatenate our accessors and the external accessors
-        var expr_accessors = try self.exprAccessors(allocator_, ext_accessors_);
-        defer {
-            if (expr_accessors) |*accessors| {
-                accessors.deinit();
-            }
-        }
-
         // get the macro for this expression
         const macro = macros_.get(self.key) orelse return error.MacroKeyNotFound;
 
@@ -65,30 +57,32 @@ pub const ZExpr = struct {
             }
         }
 
+        // set up a temporary list to concatenate our accessors and the external accessors
+        var expr_accessors: ?std.ArrayList([]const u8) = null;
+        defer {
+            if (expr_accessors) |*accessors| {
+                accessors.deinit();
+            }
+        }
+
         if (self.batch_args_list) |batch_args_list| {
-            if (init_result_ and expr_accessors == null) {
+            if (init_result_ and ext_accessors_ == null) {
                 result_.* = .{ .Array = std.ArrayList(ZValue).init(allocator_) };
             }
-            const accessor_index: ?usize = idxblk: {
-                if (ext_accessors_) |eacs| {
-                    break :idxblk try std.fmt.parseUnsigned(usize, eacs[0], 10);
-                } else {
-                    break :idxblk null;
-                }
-            };
-            for (batch_args_list.items) |args, i| {
-                if (accessor_index) |idx| if (idx != i) continue;
+            if (ext_accessors_) |eacs| {
+                const idx = try std.fmt.parseUnsigned(usize, eacs[0], 10);
+                const ctx = .{ .expr_args = expr_args, .batch_args = batch_args_list.items[idx], .macros = macros_ };
+                expr_accessors = try self.exprAccessors(allocator_, if (eacs.len > 1) eacs[1..] else null);
+                return try reduce(allocator_, macro.value, result_, true, if (expr_accessors) |acs| acs.items else null, ctx);
+            }
+            for (batch_args_list.items) |args| {
                 const ctx = .{ .expr_args = expr_args, .batch_args = args, .macros = macros_ };
-                if (expr_accessors) |acs| {
-                    const accessors: ?[][]const u8 = if (acs.items.len > 1) acs.items[1..] else null;
-                    return try reduce(allocator_, macro.value, result_, true, accessors, ctx);
-                } else {
-                    var value: ZValue = undefined;
-                    _ = try reduce(allocator_, macro.value, &value, true, null, ctx);
-                    try result_.*.Array.append(value);
-                }
+                var value: ZValue = undefined;
+                _ = try reduce(allocator_, macro.value, &value, true, if (self.accessors) |acs| acs.items else null, ctx);
+                try result_.*.Array.append(value);
             }
         } else {
+            expr_accessors = try self.exprAccessors(allocator_, ext_accessors_);
             const ctx = .{ .expr_args = expr_args, .batch_args = null, .macros = macros_ };
             if (expr_accessors) |acs| {
                 return try reduce(allocator_, macro.value, result_, true, acs.items, ctx);
@@ -683,4 +677,71 @@ test "batched macro expression evaluation - no accessors" {
     try std.testing.expectEqualStrings("#ff0000ffff", result.Array.items[1].String.items);
 }
 
-// TODO: test "batched macro expression evaluation" {}
+test "batched macro expression evaluation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // macro
+    // $color(alpha, beta) = {
+    //     black = #000000 + %alpha + %beta
+    //     red = #ff0000 + %alpha + %beta
+    // }
+    var black_val = ConcatList.init(&arena.allocator);
+    try black_val.append(.{ .String = "#000000" });
+    try black_val.append(.{ .Parameter = "alpha" });
+    try black_val.append(.{ .Parameter = "beta" });
+    var red_val = ConcatList.init(&arena.allocator);
+    try red_val.append(.{ .String = "#ff0000" });
+    try red_val.append(.{ .Parameter = "alpha" });
+    try red_val.append(.{ .Parameter = "beta" });
+    var color_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    try color_obj.Object.putNoClobber("black", black_val);
+    try color_obj.Object.putNoClobber("red", red_val);
+    var color_val = ConcatList.init(&arena.allocator);
+    try color_val.append(color_obj);
+
+    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    try parameters.putNoClobber("alpha", null);
+    try parameters.putNoClobber("beta", null);
+    const macro = ZMacro{ .parameters = parameters, .value = color_val };
+
+    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    try macros.putNoClobber("color", macro);
+
+    // expression
+    // $color(?, ff).black % [
+    //     [ 07 ]
+    //     [ ff ]
+    // ]
+    var alpha1 = ConcatList.init(&arena.allocator);
+    try alpha1.append(.{ .String = "07" });
+    var alpha1_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    try alpha1_batch.append(alpha1);
+    var alpha2 = ConcatList.init(&arena.allocator);
+    try alpha2.append(.{ .String = "ff" });
+    var alpha2_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    try alpha2_batch.append(alpha2);
+    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(&arena.allocator);
+    try batch_args_list.append(alpha1_batch);
+    try batch_args_list.append(alpha2_batch);
+    var beta = ConcatList.init(&arena.allocator);
+    try beta.append(.{ .String = "ff" });
+    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    try args.putNoClobber("alpha", .BatchPlaceholder);
+    try args.putNoClobber("beta", .{ .CList = beta });
+    var accessors = std.ArrayList([]const u8).init(&arena.allocator);
+    try accessors.append("black");
+    const expr = ZExpr{ .key = "color", .args = args, .accessors = accessors, .batch_args_list = batch_args_list };
+
+    // evaluate the expression
+    var result: ZValue = undefined;
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    try std.testing.expect(did_evaluate);
+
+    // test the result
+    // [ "#00000007ff", "#000000ffff" ]
+    try std.testing.expect(result == .Array);
+    try std.testing.expectEqual(@as(usize, 2), result.Array.items.len);
+    try std.testing.expectEqualStrings("#00000007ff", result.Array.items[0].String.items);
+    try std.testing.expectEqualStrings("#000000ffff", result.Array.items[1].String.items);
+}
