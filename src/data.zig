@@ -1,5 +1,4 @@
 const std = @import("std");
-const StateMachine = @import("state_machine.zig").StateMachine;
 
 pub const ZValue = union(enum) {
     Object: std.StringArrayHashMap(ZValue),
@@ -152,8 +151,8 @@ pub const ConcatItem = union(enum) {
 };
 pub const ConcatList = std.ArrayList(ConcatItem);
 pub const ZMacro = struct {
-    parameters: ?std.StringArrayHashMap(?ConcatList), // these parameters can optionally have default values
-    value: ConcatList,
+    parameters: ?std.StringArrayHashMap(?ConcatList) = null,
+    value: ConcatList = undefined,
 };
 pub const ReductionContext = struct {
     expr_args: ?std.StringArrayHashMap(ZExprArg) = null,
@@ -265,24 +264,6 @@ pub fn reduce
     }
     return true;
 }
-/// These are the things that may be placed on the parse stack.
-pub const StackElem = union(enum) {
-    Key: []const u8,
-
-    // non-macro decl
-    Val: ZValue,
-    ExprArgList: std.ArrayList(ZExprArg),
-
-    // limbo
-    Expr: ZExpr,
-    BSet: std.ArrayList(std.ArrayList(ConcatList)),
-    BList: std.ArrayList(ConcatList),
-
-    // macro-decl
-    CList: ConcatList,
-    CItem: ConcatItem,
-    CExprArgList: std.ArrayList(ConcatList),
-};
 
 //======================================================================================================================
 //======================================================================================================================

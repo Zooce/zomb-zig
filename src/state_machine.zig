@@ -3,7 +3,7 @@ const TokenType = @import("token.zig").TokenType;
 const testing = std.testing;
 
 const StackWidth = u128;
-const StackElemWidth = u4; // TODO: we have an extra bit here so it's easier to debug - change this to u3 later
+const StackElemWidth = u4; // TODO: we have an extra bit here so it's easier to debug - change this to u3 later?
 const STACK_SHIFT = @bitSizeOf(StackElemWidth);
 pub const MAX_STACK_SIZE = @bitSizeOf(StackWidth) / STACK_SHIFT; // add more stacks if we need more?
 
@@ -12,7 +12,8 @@ const StackState = enum(StackElemWidth) {
     ArrayBegin,
     MacroExprKey,
     MacroExprArgsBegin,
-    Value, // = 0b100
+    MacroDeclParam,
+    Value, // = 0b101
 };
 
 const NonStackState = enum(u5) { // we need 5 bits to represent these 18 values
@@ -29,7 +30,7 @@ const NonStackState = enum(u5) { // we need 5 bits to represent these 18 values
 
     MacroDeclKey,
     MacroDeclOptionalParams,
-    MacroDeclParams,
+    ConsumeMacroDeclParam,
 
     MacroExprOptionalArgs,
     MacroExprOptionalAccessors,
@@ -77,7 +78,7 @@ pub const StateMachine = struct {
     }
 
     pub fn pop(self: *Self) !void {
-        if (self.top()) |_| {
+        if (self.stack_size > 0) {
             // update stack
             self.stack >>= STACK_SHIFT;
             self.stack_size -= 1;
@@ -89,7 +90,8 @@ pub const StateMachine = struct {
                     .ArrayBegin => .ConsumeArrayItem,
                     .MacroExprKey => .ConsumeMacroExprArgs,
                     .MacroExprArgsBegin => .ConsumeMacroExprArg,
-                    .Value => .Value,
+                    .MacroDeclParam => .ConsumeMacroDeclParam,
+                    .Value => .ValueConcat,
                 };
             } else {
                 self.state = .Decl;
@@ -185,15 +187,20 @@ pub const StateMachine = struct {
                 else => return error.UnexpectedMacroDeclKeyToken,
             },
             .MacroDeclOptionalParams => switch (token_) {
-                .OpenParen => self.state = .MacroDeclParams,
+                .OpenParen => try self.push(.MacroDeclParam),
                 .Equals => try self.push(.Value),
-                else => return error.UnexpectedMacroDeclOptionalParmasToken,
+                else => return error.UnexpectedMacroDeclOptionalParamsToken,
             },
-            .MacroDeclParams => switch (token_) {
-                .String => {}, // stay in this state
+            .MacroDeclParam => switch (token_) {
+                .String => self.state = .MacroDeclParamOptionalDefaultValue
                 .CloseParen => self.state = .Equals,
-                else => return error.UnexpectedMacroDeclParamsToken,
+                else => return error.UnexpectedMacroDeclParamToken,
             },
+            .MacroDeclParamOptionalDefaultValue => switch (token_) {
+                .String => self.state = .MacroDeclParam,
+                .Equals => try self.push(.Value)
+            },
+            .ConsumeMacroDeclParam => self.state = .MacroDeclParam,
 
             // Macro Expr
             .MacroExprKey => self.state = switch (token_) {
