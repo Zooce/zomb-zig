@@ -7,11 +7,12 @@ pub const Token = token.Token;
 
 const parse = @import("parse.zig");
 pub const Parser = parse.Parser;
-pub const ZombValue = parse.ZombValue;
-
 pub const Zomb = parse.Zomb;
 
-pub const max_nested_depth = parse.max_stack_size;
+const data = @import("data.zig");
+pub const ZValue = data.ZValue;
+
+pub const max_nested_depth = @import("state_machine.zig").MAX_STACK_SIZE;
 
 pub const StringReader = @import("string_reader.zig").StringReader;
 
@@ -20,4 +21,6 @@ test {
     _ = @import("scan.zig");
     _ = @import("token.zig");
     _ = @import("parse.zig");
+    _ = @import("data.zig");
+    _ = @import("state_machine.zig");
 }

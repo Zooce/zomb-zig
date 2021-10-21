@@ -13,13 +13,15 @@ const StackState = enum(StackElemWidth) {
     MacroExprKey,
     MacroExprArgsBegin,
     MacroDeclParam,
-    Value, // = 0b101
+    MacroExprBatchListBegin,
+    Value, // = 0b0110
 };
 
-const NonStackState = enum(u5) { // we need 5 bits to represent these 18 values
-    Decl = STACK_SHIFT + 1,
+const NonStackState = enum(u5) { // we need 5 bits to represent these 19 values
+    Decl = 0b01000,
     Key,
     Equals,
+    ValueEnter,
     ValueConcat,
 
     ConsumeObjectEntry,
@@ -30,16 +32,21 @@ const NonStackState = enum(u5) { // we need 5 bits to represent these 18 values
 
     MacroDeclKey,
     MacroDeclOptionalParams,
+    MacroDeclParamOptionalDefaultValue,
     ConsumeMacroDeclParam,
 
-    MacroExprOptionalArgs,
+    MacroExprOptionalArgsOrAccessors,
+    ConsumeMacroExprArgs,
     MacroExprOptionalAccessors,
     MacroExprAccessors,
-    ConsumeMacroExprArgs,
-    MacroExprEval,
+    MacroExprOptionalBatch,
+    ConsumeMacroExprBatchArgsList,
 
     ConsumeMacroExprArg,
     MacroExprArgsEnd,
+
+    ConsumeMacroExprBatchArgs,
+    MacroExprBatchListEnd,
 };
 
 pub const State = @Type(blk: {
@@ -91,6 +98,7 @@ pub const StateMachine = struct {
                     .MacroExprKey => .ConsumeMacroExprArgs,
                     .MacroExprArgsBegin => .ConsumeMacroExprArg,
                     .MacroDeclParam => .ConsumeMacroDeclParam,
+                    .MacroExprBatchListBegin => .ConsumeMacroExprBatchArgsList,
                     .Value => .ValueConcat,
                 };
             } else {
@@ -112,18 +120,17 @@ pub const StateMachine = struct {
         std.debug.print(
             \\----[State Machine]----
             \\State = {}
-            \\Stack = 0x{X:0>32} | {}
+            \\Stack = 0x{X:0>32}
+            \\Size  = {}
+            \\
             , .{ self.state, self.stack, self.stack_size }
         );
     }
 
-    // fn stateStackHasMacros(self: Self) bool {
-    //     return (self.stack & 0x2222_2222_2222_2222_2222_2222_2222_2222) > 0;
-    // }
-
     /// Transition the state machine to the next state. This will catch all the
     /// expected token type errors.
     pub fn transition(self: *Self, token_: TokenType) !void {
+        // we can still transition even if the token type is .None
         switch (self.state) {
             .Decl => self.state = switch (token_) {
                 .MacroKey => .MacroDeclKey,
@@ -131,11 +138,10 @@ pub const StateMachine = struct {
                 else => return error.UnexpectedDeclToken,
             },
             .Equals => switch (token_) {
-                .Equals => try self.push(.Value), // TODO: go to ValueEnter
+                .Equals => self.state = .ValueEnter,
                 else => return error.UnexpectedEqualsToken,
             },
-            // TODO: consider adding a ValueEnter state where we can push the appropriate list to the stack?
-            // .ValueEnter => self.state = .Value,
+            .ValueEnter => try self.push(.Value),
             .Value => switch (token_) {
                 .String, .RawString, .MacroParamKey => self.state = .ValueConcat,
                 .MacroKey => try self.push(.MacroExprKey),
@@ -155,15 +161,14 @@ pub const StateMachine = struct {
             // Object
             .ObjectBegin => self.state = switch (token_) {
                 .OpenCurly => .Key,
-                // TODO: maybe we should handle the empty object case here instead of in the .Key state?
                 else => return error.UnexpectedObjectBeginToken,
             },
             .Key => self.state = switch (token_) {
                 .String => .Equals,
-                .CloseCurly => .ObjectEnd, // TODO: stage 2 - maybe we don't handle empty objects this way anymore?
+                .CloseCurly => .ObjectEnd,
                 else => return error.UnexpectedKeyToken,
             },
-            .ConsumeObjectEntry => self.state = .ObjectEnd, // TODO: is this even necessary?
+            .ConsumeObjectEntry => self.state = .ObjectEnd,
             .ObjectEnd => switch (token_) {
                 .String => self.state = .Key,
                 .CloseCurly => try self.pop(),
@@ -172,13 +177,13 @@ pub const StateMachine = struct {
 
             // Array
             .ArrayBegin => switch (token_) {
-                .OpenSquare => try self.push(.Value),
+                .OpenSquare => self.state = .ValueEnter,
                 else => return error.UnexpectedArrayBeginToken,
             },
-            .ConsumeArrayItem => self.state = .ArrayEnd, // TODO: is this even necessary
+            .ConsumeArrayItem => self.state = .ArrayEnd,
             .ArrayEnd => switch (token_) {
                 .CloseSquare => try self.pop(),
-                else => try self.push(.Value), // TODO: maybe do this in the .ConsumeArrayItem state?
+                else => self.state = .ValueEnter,
             },
 
             // Macro Decl
@@ -188,64 +193,71 @@ pub const StateMachine = struct {
             },
             .MacroDeclOptionalParams => switch (token_) {
                 .OpenParen => try self.push(.MacroDeclParam),
-                .Equals => try self.push(.Value),
+                .Equals => self.state = .ValueEnter,
                 else => return error.UnexpectedMacroDeclOptionalParamsToken,
             },
             .MacroDeclParam => switch (token_) {
-                .String => self.state = .MacroDeclParamOptionalDefaultValue
+                .String => self.state = .MacroDeclParamOptionalDefaultValue,
                 .CloseParen => self.state = .Equals,
                 else => return error.UnexpectedMacroDeclParamToken,
             },
-            .MacroDeclParamOptionalDefaultValue => switch (token_) {
-                .String => self.state = .MacroDeclParam,
-                .Equals => try self.push(.Value)
+            .MacroDeclParamOptionalDefaultValue => self.state = switch (token_) {
+                .String => .MacroDeclParam,
+                .Equals => .ValueEnter,
+                .CloseParen => .Equals,
+                else => return error.UnexpectedMacroDeclParamOptionalDefaultValueToken,
             },
             .ConsumeMacroDeclParam => self.state = .MacroDeclParam,
 
             // Macro Expr
             .MacroExprKey => self.state = switch (token_) {
-                .MacroKey => .MacroExprOptionalArgs,
+                .MacroKey => .MacroExprOptionalArgsOrAccessors,
                 else => return error.UnexpectedMacroExprKeyToken,
             },
-            .MacroExprOptionalArgs => switch (token_) {
+            .MacroExprOptionalArgsOrAccessors => switch (token_) {
                 .MacroAccessor => self.state = .MacroExprOptionalAccessors,
                 .OpenParen => try self.push(.MacroExprArgsBegin),
-                else => self.state = .MacroExprEval,
+                else => self.state = .MacroExprOptionalBatch,
             },
+            .ConsumeMacroExprArgs => self.state = .MacroExprOptionalAccessors,
             .MacroExprOptionalAccessors => self.state = switch (token_) {
                 .MacroAccessor => .MacroExprAccessors,
-                else => .MacroExprEval,
+                else => .MacroExprOptionalBatch,
             },
             .MacroExprAccessors => switch (token_) {
                 .MacroAccessor => {}, // stay here
-                else => self.state = .MacroExprEval,
+                else => self.state = .MacroExprOptionalBatch,
             },
-            .ConsumeMacroExprArgs => self.state = .MacroExprOptionalAccessors,
-            .MacroExprEval => try self.pop(),
+            .MacroExprOptionalBatch => switch (token_) {
+                .Percent => try self.push(.MacroExprBatchListBegin),
+                else => try self.pop(),
+            },
+            .ConsumeMacroExprBatchArgsList => try self.pop(),
 
             // Macro Expr Args
             .MacroExprArgsBegin => switch (token_) {
-                .OpenParen => try self.push(.Value),
+                .OpenParen => self.state = .ValueEnter,
                 else => return error.UnexpectedMacroExprArgsBeginToken,
             },
             .ConsumeMacroExprArg => self.state = .MacroExprArgsEnd,
             .MacroExprArgsEnd => switch (token_) {
                 .CloseParen => try self.pop(),
-                else => try self.push(.Value),
+                else => self.state = .ValueEnter,
+            },
+
+            // Macro Expr Batch List
+            .MacroExprBatchListBegin => switch (token_) {
+                .OpenSquare => try self.push(.ArrayBegin),
+                else => return error.UnexpectedMacroExprBatchListBeginToken,
+            },
+            .ConsumeMacroExprBatchArgs => self.state = .MacroExprBatchListEnd,
+            .MacroExprBatchListEnd => switch (token_) {
+                .CloseSquare => try self.pop(),
+                else => try self.push(.ArrayBegin),
             },
         }
     }
 };
-
-test "temp" {
-    const state = StackState.ObjectBegin;
-    var sm = StateMachine{};
-    try sm.push(state);
-    try testing.expectEqual(@intToEnum(State, @enumToInt(state)), sm.top().?);
-    try sm.pop();
-    try testing.expect(sm.top() == null);
-}
-
 
 test "general stack logic" {
     var stack: u128 = 0;

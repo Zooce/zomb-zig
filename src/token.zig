@@ -160,12 +160,6 @@ pub const Tokenizer = struct {
         };
     }
 
-    pub fn setBuffer(self: *Self, buffer_: []const u8) void {
-        self.buffer = buffer_;
-        self.buffer_cursor = 0;
-        self.buffer_index += 1;
-    }
-
     fn tokenComplete(self: *Self) void {
         self.state = State.None;
         self.token.is_valid = true;
@@ -492,23 +486,6 @@ pub const Tokenizer = struct {
         return null;
     }
 
-    /// Consumes all bytes while they match one of the given targets, and return the first byte that
-    /// does not match a target. If the buffer cursor points to the end of the buffer, this returns
-    /// `null`.
-    fn consumeWhileBytes(self: *Self, targets_: []const u8) ?u8 {
-        peekloop: while (self.peek()) |byte| {
-            for (targets_) |target| {
-                if (byte == target) {
-                    _ = self.consume();
-                    continue :peekloop;
-                }
-            }
-            // The byte we're looking at did not match any target, so return.
-            return byte;
-        }
-        return null; // we've exhausted the buffer
-    }
-
     /// Skips all bytes while they match one of the given targets, and return the first byte that
     /// does not match a target. If the buffer cursor points to the end of the buffer, this returns
     /// `null`.
@@ -580,17 +557,6 @@ pub const Tokenizer = struct {
         return false;
     }
 
-    /// Whether the buffer cursor is pointing to a delimiter or EOF.
-    fn atDelimiterOrEof(self: *Self) bool {
-        const byte = self.peek() orelse return true;
-        // check for delimiters
-        for (delimiters) |d| {
-            if (byte == d) {
-                return true;
-            }
-        }
-        return false;
-    }
 }; // end Tokenizer struct
 
 //==============================================================================

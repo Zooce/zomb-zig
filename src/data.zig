@@ -35,6 +35,23 @@ pub const ZExpr = struct {
     accessors: ?std.ArrayList([]const u8) = null,
     batch_args_list: ?std.ArrayList(std.ArrayList(ConcatList)) = null,
 
+    pub fn setArgs
+        ( self: *Self
+        , allocator_: *std.mem.Allocator
+        , args_: std.ArrayList(ZExprArg)
+        , macros_: std.StringArrayHashMap(ZMacro)
+        )
+        !void
+    {
+        const macro = macros_.get(self.key) orelse return error.MacroKeyNotFound;
+        self.args = std.StringArrayHashMap(ZExprArg).init(allocator_);
+        for (macro.parameters.?.keys()) |key, i| {
+            if (i < args_.items.len) {
+                try self.args.?.putNoClobber(key, args_.items[i]);
+            }
+        }
+    }
+
     pub fn evaluate
         ( self: Self
         , allocator_: *std.mem.Allocator
@@ -124,6 +141,7 @@ pub const ZExpr = struct {
                 var iter = macro_.parameters.?.iterator();
                 while (iter.next()) |entry| {
                     if ((iter.index - 1) < args.count()) {
+                        // TODO: check that expr_args already contains this key
                         continue;
                     }
                     const key = entry.key_ptr.*;
@@ -169,7 +187,6 @@ pub fn reduce
     )
     anyerror!bool
 {
-    // TODO: also deal with accessors
     if (concat_list_.items.len == 0) {
         return error.CannotReduceEmptyConcatList;
     }
@@ -264,6 +281,33 @@ pub fn reduce
     }
     return true;
 }
+
+/// These are the things that may be placed on the parse stack.
+pub const StackElem = union(enum) {
+    TopLevelObject: std.StringArrayHashMap(ZValue),
+    Key: []const u8,
+    CList: ConcatList,
+    CItem: ConcatItem,
+    ExprArgList: std.ArrayList(ZExprArg),
+    BSet: std.ArrayList(std.ArrayList(ConcatList)),
+
+    pub fn toString(self: StackElem) []const u8 {
+        return switch (self) {
+            .TopLevelObject => ".TopLevelObject",
+            .Key => ".Key ",
+            .CList => ".CList",
+            .CItem => |c| switch (c) {
+                .Object => ".CItem.Object",
+                .Array => ".CItem.Array",
+                .String => ".CItem.String",
+                .Parameter => ".CItem.Parameter",
+                .Expression => ".CItem.Expression",
+            },
+            .ExprArgList => ".ExprArgList",
+            .BSet => ".BSet",
+        };
+    }
+};
 
 //======================================================================================================================
 //======================================================================================================================
