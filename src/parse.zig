@@ -132,9 +132,10 @@ pub const Parser = struct {
         var done = false;
         while (!done) {
             count += 1;
+            try self.log(count, "Pre-Step");
             try self.step();
-            try self.log(count);
             if (self.state_machine.state == .Decl) {
+                try self.log(count, "Pre-Decl Consume");
                 try self.consumeAtTopLevel(&out_arena.allocator);
             }
             done = self.token == null and self.stack.items.len == 1;
@@ -226,7 +227,10 @@ pub const Parser = struct {
             },
             .Equals => {}, // handled in .ValueEnter
             .ValueEnter => {
-                try self.stack.append(.{ .CList = ConcatList.init(&self.arena.allocator) });
+                // don't add the CList for an empty array
+                if (self.token.?.token_type != .CloseSquare) {
+                    try self.stack.append(.{ .CList = ConcatList.init(&self.arena.allocator) });
+                }
                 keep_token = true;
             },
             .Value => {
@@ -262,9 +266,7 @@ pub const Parser = struct {
             .Key => if (self.token.?.token_type == .String) {
                 try self.stack.append(.{ .Key = token_slice });
             },
-            .ConsumeObjectEntry => {
-                keep_token = true;
-            },
+            .ConsumeObjectEntry => keep_token = true,
             .ObjectEnd => if (self.token.?.token_type == .String) {
                 keep_token = true;
             },
@@ -280,11 +282,11 @@ pub const Parser = struct {
                 keep_token = true;
             },
 
-            // Macro Declaration
+            // Macro Declaration -- TODO: push everything onto the stack like other types do
             .MacroDeclKey => {
                 var res = try self.macros.getOrPut(token_slice);
                 if (res.found_existing) return error.DuplicateMacroName;
-                res.value_ptr.* = ZMacro{};
+                res.value_ptr.* = ZMacro{}; // TODO: push ZMacro onto the stack instead
                 self.parse_macro = ParseMacro{
                     .key = token_slice,
                     .macro = res.value_ptr,
@@ -295,16 +297,26 @@ pub const Parser = struct {
             },
             .MacroDeclParam => switch (self.token.?.token_type) {
                 .String => try self.parse_macro.?.newParameter(token_slice),
-                .CloseParen => if (self.parse_macro.?.parameter_counts.?.count() == 0) {
-                    return error.EmptyMacroDeclParams;
-                },
+                .CloseParen => keep_token = true,
                 else => {}, // state machine will catch unexpected token errors
             },
-            .MacroDeclParamOptionalDefaultValue => if (self.token.?.token_type == .String) {
-                keep_token = true;
+            .MacroDeclParamOptionalDefaultValue => switch (self.token.?.token_type) {
+                .String, .CloseParen => {
+                    self.parse_macro.?.current_param = null;
+                    keep_token = true;
+                },
+                else => {},
             },
-            .ConsumeMacroDeclParam => {
-                keep_token = true;
+            .ConsumeMacroDeclParam => keep_token = true,
+            .MacroDeclParamsEnd => {
+                self.parse_macro.?.current_param = null;
+                switch (self.token.?.token_type) {
+                    .String => keep_token = true,
+                    .CloseParen => if (self.parse_macro.?.parameter_counts.?.count() == 0) {
+                        return error.EmptyMacroDeclParams;
+                    },
+                    else => {},
+                }
             },
 
             // Macro Expression
@@ -369,35 +381,32 @@ pub const Parser = struct {
     }
 
     // TODO: This is for prototyping only -- remove before release
-    pub fn log(self: Self, count_: usize) !void {
+    pub fn log(self: Self, count_: usize, tag_: []const u8) !void {
         std.debug.print(
             \\
-            \\=====[[ PARSER STEP {} ]]=====
+            \\=====[[ {s} {} ]]=====
             \\----[Token]----
             \\Type  = {}
             \\Value = {s}
             \\Line  = {}
             \\
             , .{
+                tag_,
                 count_,
                 if (self.token) |t| t.token_type else .None,
                 if (self.token) |t| try t.slice(self.input) else "",
                 if (self.token) |t| t.line else 0,
             }
         );
+        self.state_machine.log();
         std.debug.print(
             \\----[Parse Stack]----
             \\
             , .{}
         );
         for (self.stack.items) |stack_elem| {
-            std.debug.print(
-                \\{s}
-                \\
-                , .{stack_elem.toString()}
-            );
+            std.debug.print("{union}", .{stack_elem});
         }
-        self.state_machine.log();
         std.debug.print("\n", .{});
     }
 };
