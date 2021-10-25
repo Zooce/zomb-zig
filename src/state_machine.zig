@@ -32,6 +32,7 @@ pub const State = enum {
     MacroDeclOptionalParams,
     MacroDeclParamOptionalDefaultValue,
     ConsumeMacroDeclParam,
+    ConsumeMacroDeclDefaultParam,
     MacroDeclParamsEnd,
 
     MacroExprOptionalArgsOrAccessors,
@@ -92,7 +93,7 @@ pub const StateMachine = struct {
                     .ArrayBegin => .ConsumeArrayItem,
                     .MacroExprKey => .ConsumeMacroExprArgs,
                     .MacroExprArgsBegin => .ConsumeMacroExprArg,
-                    .MacroDeclParam => .ConsumeMacroDeclParam,
+                    .MacroDeclParam => .ConsumeMacroDeclDefaultParam,
                     .MacroExprBatchListBegin => .ConsumeMacroExprBatchArgsList,
                     .Value => .ValueConcat,
                     else => return error.UnexpectedStateOnStack,
@@ -197,21 +198,28 @@ pub const StateMachine = struct {
                 else => return error.UnexpectedMacroDeclParamToken,
             },
             .MacroDeclParamOptionalDefaultValue => switch (token_) {
-                .String => self.state = .MacroDeclParam,
                 .Equals => {
                     try self.push(.MacroDeclParam);
                     self.state = .ValueEnter;
                 },
-                .CloseParen => self.state = .MacroDeclParamsEnd,
+                .String, .CloseParen => self.state = .ConsumeMacroDeclParam,
                 else => return error.UnexpectedMacroDeclParamOptionalDefaultValueToken,
             },
-            .ConsumeMacroDeclParam => {
-                try self.pop();
-                self.state = .MacroDeclParamsEnd;
+            .ConsumeMacroDeclParam => self.state = switch (token_) {
+                .String => .MacroDeclParam,
+                .CloseParen => .MacroDeclParamsEnd,
+                else => return error.UnexpectedConsumeMacroDeclParamToken,
             },
-            .MacroDeclParamsEnd => switch (token_) {
-                .String => self.state = .MacroDeclParam,
-                .CloseParen => self.state = .Equals,
+            .ConsumeMacroDeclDefaultParam => {
+                try self.pop();
+                self.state = switch (token_) {
+                    .String => .MacroDeclParam,
+                    .CloseParen => .MacroDeclParamsEnd,
+                    else => return error.UnexpectedConsumeMacroDeclDefaultParamToken,
+                };
+            },
+            .MacroDeclParamsEnd => self.state = switch (token_) {
+                .CloseParen => .Equals,
                 else => return error.UnexpectedMacroDeclParamsEndToken,
             },
 

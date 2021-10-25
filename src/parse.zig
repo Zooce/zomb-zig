@@ -14,48 +14,24 @@ const ZMacro = @import("data.zig").ZMacro;
 const StackElem = @import("data.zig").StackElem;
 const reduce = @import("data.zig").reduce;
 
-const ParseMacro = struct {
+const MacroValidator = struct {
     const Self = @This();
 
-    key: []const u8,
     current_param: ?[]const u8 = null,
-    macro: *ZMacro,
-    parameter_counts: ?std.StringArrayHashMap(usize) = null,
+    param_counts: ?std.StringArrayHashMap(usize) = null,
 
     pub fn deinit(self: *Self) void {
-        if (self.parameter_counts) |*counts| {
+        if (self.param_counts) |*counts| {
             counts.deinit();
         }
-        self.parameter_counts = null;
-    }
-
-    pub fn initParams(self: *Self, allocator_: *std.mem.Allocator) void {
-        self.macro.*.parameters = std.StringArrayHashMap(?ConcatList).init(allocator_);
-        self.parameter_counts = std.StringArrayHashMap(usize).init(allocator_);
-    }
-
-    pub fn newParameter(self: *Self, param_name_: []const u8) !void {
-        try self.macro.*.parameters.?.putNoClobber(param_name_, null);
-        try self.parameter_counts.?.putNoClobber(param_name_, 0);
-        self.current_param = param_name_;
-    }
-
-    pub fn consumeParamDefault(self: *Self, default_val_: ConcatList) !void {
-        defer self.current_param = null;
-        if (self.macro.*.parameters.?.getPtr(self.current_param.?)) |res_ptr| {
-            res_ptr.* = default_val_;
-        } else {
-            std.log.err("no parameter named '{s}'", .{ self.current_param.? });
-            return error.InvalidMacroParameter;
-        }
+        self.param_counts = null;
     }
 
     pub fn validate(self: Self) !void {
-        if (self.parameter_counts) |param_counts| {
+        if (self.param_counts) |param_counts| {
             var iter = param_counts.iterator();
             while (iter.next()) |entry| {
                 if (entry.value_ptr.* == 0) {
-                    std.log.err("'{s}' parameter never used inside '{s}' macro", .{ entry.key_ptr.*, self.key });
                     return error.UnusedMacroParamter;
                 }
             }
@@ -80,7 +56,7 @@ pub const Parser = struct {
     tokenizer: Tokenizer,
     state_machine: StateMachine = StateMachine{},
     stack: std.ArrayList(StackElem) = undefined,
-    parse_macro: ?ParseMacro = null,
+    macro_validator: ?MacroValidator = null,
     macros: std.StringArrayHashMap(ZMacro) = undefined,
     token: ?Token = null,
 
@@ -97,12 +73,14 @@ pub const Parser = struct {
     }
 
     fn consumeAtTopLevel(self: *Self, allocator_: *std.mem.Allocator) !void {
-        if (self.parse_macro) |*parse_macro| {
+        if (self.macro_validator) |*macro_validator| {
             std.debug.print("...consuming macro declaration...\n", .{});
-
-            try parse_macro.validate();
-            parse_macro.macro.*.value = self.stack.pop().CList;
-            parse_macro.deinit();
+            defer macro_validator.deinit();
+            try macro_validator.validate();
+            const c_list = self.stack.pop().CList;
+            const params = self.stack.pop().ParamMap;
+            const key = self.stack.pop().Key;
+            try self.macros.putNoClobber(key, .{ .key = key, .parameters = params, .value = c_list });
         }
         if (self.stack.items.len > 1) {
             std.debug.print("...consuming top-level object...\n", .{});
@@ -182,8 +160,15 @@ pub const Parser = struct {
                 try arr.*.append(c_list);
             },
             .ConsumeMacroDeclParam => {
+                const param = self.stack.pop().MacroDeclParam;
+                var param_map = &self.stack.items[self.stack.items.len - 1].ParamMap;
+                try param_map.*.?.putNoClobber(param, null);
+            },
+            .ConsumeMacroDeclDefaultParam => {
                 const param_default = self.stack.pop().CList;
-                try self.parse_macro.?.consumeParamDefault(param_default);
+                const param = self.stack.pop().MacroDeclParam;
+                var param_map = &self.stack.items[self.stack.items.len - 1].ParamMap;
+                try param_map.*.?.putNoClobber(param, param_default);
             },
             .ConsumeMacroExprArgs => {
                 const expr_arg_list = self.stack.pop().ExprArgList;
@@ -222,7 +207,7 @@ pub const Parser = struct {
         // process the current token based on our current state
         switch (self.state_machine.state) {
             .Decl => {
-                self.parse_macro = null;
+                self.macro_validator = null;
                 keep_token = true;
             },
             .Equals => {}, // handled in .ValueEnter
@@ -237,11 +222,11 @@ pub const Parser = struct {
                 switch (self.token.?.token_type) {
                     .String, .RawString => try self.stack.append(.{ .CItem = .{ .String = token_slice } }),
                     .MacroParamKey => {
-                        if (self.parse_macro) |parse_macro| {
-                            if (parse_macro.current_param != null) {
+                        if (self.macro_validator) |*macro_validator| {
+                            if (macro_validator.current_param != null) {
                                 return error.UseOfParameterAsDefaultValue;
                             }
-                            if (parse_macro.parameter_counts.?.getPtr(token_slice)) |p| {
+                            if (macro_validator.param_counts.?.getPtr(token_slice)) |p| {
                                 p.* += 1; // count the usage of this parameter
                             } else {
                                 return error.InvalidParameterUse;
@@ -282,40 +267,44 @@ pub const Parser = struct {
                 keep_token = true;
             },
 
-            // Macro Declaration -- TODO: push everything onto the stack like other types do
+            // Macro Declaration
             .MacroDeclKey => {
-                var res = try self.macros.getOrPut(token_slice);
-                if (res.found_existing) return error.DuplicateMacroName;
-                res.value_ptr.* = ZMacro{}; // TODO: push ZMacro onto the stack instead
-                self.parse_macro = ParseMacro{
-                    .key = token_slice,
-                    .macro = res.value_ptr,
-                };
+                if (self.macros.contains(token_slice)) {
+                    return error.DuplicateMacroName;
+                }
+                try self.stack.append(.{ .Key =  token_slice });
+                self.macro_validator = MacroValidator{};
             },
-            .MacroDeclOptionalParams => if (self.token.?.token_type == .OpenParen) {
-                self.parse_macro.?.initParams(&self.arena.allocator);
+            .MacroDeclOptionalParams => switch (self.token.?.token_type) {
+                .OpenParen => {
+                    try self.stack.append(.{ .ParamMap = std.StringArrayHashMap(?ConcatList).init(&self.arena.allocator) });
+                    self.macro_validator.?.param_counts = std.StringArrayHashMap(usize).init(&self.arena.allocator);
+                },
+                else => try self.stack.append(.{ .ParamMap = null }),
             },
             .MacroDeclParam => switch (self.token.?.token_type) {
-                .String => try self.parse_macro.?.newParameter(token_slice),
+                .String => {
+                    try self.stack.append(.{ .MacroDeclParam = token_slice });
+                    try self.macro_validator.?.param_counts.?.putNoClobber(token_slice, 0);
+                    self.macro_validator.?.current_param = token_slice;
+                },
                 .CloseParen => keep_token = true,
-                else => {}, // state machine will catch unexpected token errors
+                else => {},
             },
             .MacroDeclParamOptionalDefaultValue => switch (self.token.?.token_type) {
                 .String, .CloseParen => {
-                    self.parse_macro.?.current_param = null;
+                    self.macro_validator.?.current_param = null;
                     keep_token = true;
                 },
                 else => {},
             },
-            .ConsumeMacroDeclParam => keep_token = true,
+            .ConsumeMacroDeclParam, .ConsumeMacroDeclDefaultParam => keep_token = true,
             .MacroDeclParamsEnd => {
-                self.parse_macro.?.current_param = null;
-                switch (self.token.?.token_type) {
-                    .String => keep_token = true,
-                    .CloseParen => if (self.parse_macro.?.parameter_counts.?.count() == 0) {
+                self.macro_validator.?.current_param = null;
+                if (self.token.?.token_type == .CloseParen) {
+                    if (self.macro_validator.?.param_counts.?.count() == 0) {
                         return error.EmptyMacroDeclParams;
-                    },
-                    else => {},
+                    }
                 }
             },
 
@@ -399,6 +388,16 @@ pub const Parser = struct {
             }
         );
         self.state_machine.log();
+        std.debug.print(
+            \\----[Macros]----
+            \\
+            , .{}
+        );
+        var iter = self.macros.iterator();
+        while (iter.next()) |entry| {
+            std.debug.print("{s} = {struct}", .{entry.key_ptr.*, entry.value_ptr.*});
+        }
+
         std.debug.print(
             \\----[Parse Stack]----
             \\

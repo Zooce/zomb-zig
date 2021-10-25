@@ -306,8 +306,9 @@ fn logConcatList(list: ConcatList, writer: anytype, indent: usize) std.os.WriteE
     try writer.writeAll("]\n");
 }
 pub const ZMacro = struct {
+    key: []const u8, // FIXME: this is temporary
     parameters: ?std.StringArrayHashMap(?ConcatList) = null,
-    value: ConcatList = undefined,
+    value: ConcatList,
 
     pub fn format(value: ZMacro, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
@@ -317,6 +318,9 @@ pub const ZMacro = struct {
 
     pub fn log(self: ZMacro, writer: anytype, indent: usize) std.os.WriteError!void {
         try writer.writeAll("ZMacro = {\n");
+
+        try writer.writeByteNTimes(' ', (indent + 1) * 2);
+        try writer.print("key = {s}\n", .{self.key});
 
         try writer.writeByteNTimes(' ', (indent + 1) * 2);
         try writer.writeAll("parameters = ");
@@ -341,6 +345,9 @@ pub const ZMacro = struct {
         try writer.writeByteNTimes(' ', (indent + 1) * 2);
         try writer.writeAll("value = ");
         try logConcatList(self.value, writer, indent + 1);
+
+        try writer.writeByteNTimes(' ', indent * 2);
+        try writer.writeAll("}\n");
     }
 };
 pub const ReductionContext = struct {
@@ -461,6 +468,8 @@ pub const StackElem = union(enum) {
     CItem: ConcatItem,
     ExprArgList: std.ArrayList(ZExprArg),
     BSet: std.ArrayList(std.ArrayList(ConcatList)),
+    ParamMap: ?std.StringArrayHashMap(?ConcatList),
+    MacroDeclParam: []const u8,
 
     pub fn format(value: StackElem, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
@@ -473,7 +482,7 @@ pub const StackElem = union(enum) {
                 const o = ZValue{ .Object = obj };
                 try o.log(writer, indent);
             },
-            .Key => |k| try writer.print("{s}\n", .{k}),
+            .Key => |k| try writer.print("Key = {s}\n", .{k}),
             .CList => |l| {
                 try logConcatList(l, writer, indent);
             },
@@ -487,6 +496,25 @@ pub const StackElem = union(enum) {
                 try writer.writeAll("]\n");
             },
             .BSet => try writer.writeAll("BSet = TODO\n"),
+            .ParamMap => |pm| {
+                if (pm) |map| {
+                    try writer.writeAll("ParamMap = {\n");
+                    var iter = map.iterator();
+                    while (iter.next()) |entry| {
+                        try writer.writeByteNTimes(' ', (indent + 1) * 2);
+                        try writer.print("{s} = ", .{entry.key_ptr.*});
+                        if (entry.value_ptr.*) |c_list| {
+                            try logConcatList(c_list, writer, indent + 1);
+                        } else {
+                            try writer.writeAll("null\n");
+                        }
+                    }
+                    try writer.writeAll("}\n");
+                } else {
+                    try writer.writeAll("ParamMap = null");
+                }
+            },
+            .MacroDeclParam => |p| try writer.print("MacroDeclParam = {s}\n", .{p}),
         }
     }
 };
