@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const util = @import("util.zig");
+
 pub const ZValue = union(enum) {
     Object: std.StringArrayHashMap(ZValue),
     Array: std.ArrayList(ZValue),
@@ -12,6 +14,7 @@ pub const ZValue = union(enum) {
     }
 
     pub fn log(self: ZValue, writer: anytype, indent: usize) std.os.WriteError!void {
+        if (!util.DEBUG) return;
         switch (self) {
             .Object => |obj| {
                 try writer.writeAll("ZValue.Object = {\n");
@@ -73,6 +76,7 @@ pub const ZExpr = struct {
     }
 
     pub fn log(self: ZExpr, writer: anytype, indent: usize) std.os.WriteError!void {
+        if (!util.DEBUG) return;
         try writer.writeAll("ZExpr = {\n");
 
         try writer.writeByteNTimes(' ', (indent + 1) * 2);
@@ -138,15 +142,16 @@ pub const ZExpr = struct {
         , result_: *ZValue
         , init_result_: bool
         , ext_accessors_: ?[][]const u8
-        , macros_: std.StringArrayHashMap(ZMacro)
+        , ctx_: ReductionContext
         )
         anyerror!bool
     {
         // get the macro for this expression
-        const macro = macros_.get(self.key) orelse return error.MacroKeyNotFound;
+        const macro = ctx_.macros.get(self.key) orelse return error.MacroKeyNotFound;
+        if (util.DEBUG) std.debug.print("evaluating macro -> {struct}", .{macro});
 
         // use the macro default args if necessary
-        var expr_args = try self.exprArgs(macro);
+        var expr_args: ?std.StringArrayHashMap(ConcatList) = null;
         defer {
             if (expr_args) |*eargs| {
                 eargs.deinit();
@@ -167,19 +172,22 @@ pub const ZExpr = struct {
             }
             if (ext_accessors_) |eacs| {
                 const idx = try std.fmt.parseUnsigned(usize, eacs[0], 10);
-                const ctx = .{ .expr_args = expr_args, .batch_args = batch_args_list.items[idx], .macros = macros_ };
+                expr_args = try self.exprArgs(allocator_, ctx_.expr_args, batch_args_list.items[idx], macro);
+                const ctx = .{ .expr_args = expr_args, .macros = ctx_.macros };
                 expr_accessors = try self.exprAccessors(allocator_, if (eacs.len > 1) eacs[1..] else null);
                 return try reduce(allocator_, macro.value, result_, true, if (expr_accessors) |acs| acs.items else null, ctx);
             }
-            for (batch_args_list.items) |args| {
-                const ctx = .{ .expr_args = expr_args, .batch_args = args, .macros = macros_ };
+            for (batch_args_list.items) |batch_args| {
+                expr_args = try self.exprArgs(allocator_, ctx_.expr_args, batch_args, macro);
+                const ctx = .{ .expr_args = expr_args, .macros = ctx_.macros };
                 var value: ZValue = undefined;
                 _ = try reduce(allocator_, macro.value, &value, true, if (self.accessors) |acs| acs.items else null, ctx);
                 try result_.*.Array.append(value);
             }
         } else {
+            expr_args = try self.exprArgs(allocator_, ctx_.expr_args, null, macro);
             expr_accessors = try self.exprAccessors(allocator_, ext_accessors_);
-            const ctx = .{ .expr_args = expr_args, .batch_args = null, .macros = macros_ };
+            const ctx = .{ .expr_args = expr_args, .macros = ctx_.macros };
             if (expr_accessors) |acs| {
                 return try reduce(allocator_, macro.value, result_, true, acs.items, ctx);
             } else {
@@ -213,24 +221,69 @@ pub const ZExpr = struct {
         return expr_accessors;
     }
 
-    fn exprArgs(self: Self, macro_: ZMacro) anyerror!?std.StringArrayHashMap(ZExprArg) {
-        var expr_args: ?std.StringArrayHashMap(ZExprArg) = null;
-        if (self.args) |args| {
-            expr_args = try args.clone();
-            if (args.count() < macro_.parameters.?.count()) {
-                var iter = macro_.parameters.?.iterator();
-                while (iter.next()) |entry| {
-                    if ((iter.index - 1) < args.count()) {
-                        // TODO: check that expr_args already contains this key
-                        continue;
+    fn exprArgs
+        ( self: Self
+        , allocator_: *std.mem.Allocator
+        , ctx_args_: ?std.StringArrayHashMap(ConcatList)
+        , batch_args_: ?std.ArrayList(ConcatList)
+        , macro_: ZMacro
+        )
+        anyerror!?std.StringArrayHashMap(ConcatList)
+    {
+        if (self.args == null) {
+            return null;
+        }
+        var expr_args = std.StringArrayHashMap(ConcatList).init(allocator_);
+        var arg_iter = self.args.?.iterator();
+        var bidx: usize = 0;
+        while (arg_iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            var res = try expr_args.getOrPut(key);
+            if (res.found_existing) return error.DuplicateKey;
+            res.value_ptr.* = ConcatList.init(allocator_);
+            const val = entry.value_ptr.*;
+            switch (val) {
+                .CList => |*c_list| {
+                    for (c_list.items) |item| {
+                        switch (item) {
+                            .Parameter => |p| {
+                                for (ctx_args_.?.get(p).?.items) |p_item| {
+                                    try res.value_ptr.*.append(p_item);
+                                }
+                            },
+                            else => try res.value_ptr.*.append(item),
+                        }
                     }
-                    const key = entry.key_ptr.*;
-                    const val = entry.value_ptr.*;
-                    if (val == null) {
-                        return error.MissingDefaultValue;
+                },
+                .BatchPlaceholder => {
+                    for (batch_args_.?.items[bidx].items) |item| {
+                        switch (item) {
+                            .Parameter => |p| {
+                                for (ctx_args_.?.get(p).?.items) |p_item| {
+                                    try res.value_ptr.*.append(p_item);
+                                }
+                            },
+                            else => try res.value_ptr.*.append(item),
+                        }
                     }
-                    try expr_args.?.putNoClobber(key, .{ .CList = val.? });
+                    bidx += 1;
+                },
+            }
+        }
+
+        // get the remaining default parameters
+        if (self.args.?.count() < macro_.parameters.?.count()) {
+            var def_arg_iter = macro_.parameters.?.iterator();
+            while (def_arg_iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (expr_args.contains(key)) {
+                    continue;
                 }
+                const val = entry.value_ptr.*;
+                if (val == null) {
+                    return error.MissingDefaultValue;
+                }
+                try expr_args.putNoClobber(key, val.?);
             }
         }
         return expr_args;
@@ -247,6 +300,7 @@ pub const ZExprArg = union(enum) {
     }
 
     pub fn log(self: ZExprArg, writer: anytype, indent: usize) std.os.WriteError!void {
+        if (!util.DEBUG) return;
         try writer.writeAll("ZExprArg.");
         switch (self) {
             .CList => |list| try logConcatList(list, writer, indent),
@@ -268,6 +322,7 @@ pub const ConcatItem = union(enum) {
     }
 
     pub fn log(self: ConcatItem, writer: anytype, indent: usize) std.os.WriteError!void {
+        if (!util.DEBUG) return;
         switch (self) {
             .Object => |obj| {
                 try writer.writeAll("ConcatItem.Object = {\n");
@@ -297,6 +352,7 @@ pub const ConcatItem = union(enum) {
 };
 pub const ConcatList = std.ArrayList(ConcatItem);
 fn logConcatList(list: ConcatList, writer: anytype, indent: usize) std.os.WriteError!void {
+    if (!util.DEBUG) return;
     try writer.writeAll("ConcatList = [\n");
     for (list.items) |citem| {
         try writer.writeByteNTimes(' ', (indent + 1) * 2);
@@ -306,7 +362,6 @@ fn logConcatList(list: ConcatList, writer: anytype, indent: usize) std.os.WriteE
     try writer.writeAll("]\n");
 }
 pub const ZMacro = struct {
-    key: []const u8, // FIXME: this is temporary
     parameters: ?std.StringArrayHashMap(?ConcatList) = null,
     value: ConcatList,
 
@@ -317,10 +372,8 @@ pub const ZMacro = struct {
     }
 
     pub fn log(self: ZMacro, writer: anytype, indent: usize) std.os.WriteError!void {
+        if (!util.DEBUG) return;
         try writer.writeAll("ZMacro = {\n");
-
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.print("key = {s}\n", .{self.key});
 
         try writer.writeByteNTimes(' ', (indent + 1) * 2);
         try writer.writeAll("parameters = ");
@@ -351,9 +404,33 @@ pub const ZMacro = struct {
     }
 };
 pub const ReductionContext = struct {
-    expr_args: ?std.StringArrayHashMap(ZExprArg) = null,
-    batch_args: ?std.ArrayList(ConcatList) = null,
+    expr_args: ?std.StringArrayHashMap(ConcatList) = null,
     macros: std.StringArrayHashMap(ZMacro),
+
+    pub fn format(value: ReductionContext, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try value.log(writer);
+    }
+
+    pub fn log(self: ReductionContext, writer: anytype) std.os.WriteError!void {
+        if (!util.DEBUG) return;
+        try writer.writeAll("ReductionContext = {\n");
+
+        try writer.writeAll("  expr_args = ");
+        if (self.expr_args) |expr_args| {
+            try writer.writeAll("{\n");
+            var iter = expr_args.iterator();
+            while (iter.next()) |entry| {
+                try writer.print("    {s} = ", .{entry.key_ptr.*});
+                try logConcatList(entry.value_ptr.*, writer, 3);
+            }
+        } else {
+            try writer.writeAll("null\n");
+        }
+
+        try writer.writeAll("}\n");
+    }
 };
 pub fn reduce
     ( allocator_: *std.mem.Allocator
@@ -365,6 +442,22 @@ pub fn reduce
     )
     anyerror!bool
 {
+    if (util.DEBUG) {
+        const held = std.debug.getStderrMutex().acquire();
+        defer held.release();
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print("\nReducing ConcatList:\n{struct}\n", .{ctx_});
+        {
+            try logConcatList(concat_list_, stderr, 0);
+        }
+        if (accessors_) |acs| {
+            try stderr.writeAll("accessors = [\n");
+            for (acs) |item| {
+                try stderr.print("  {s}\n", .{item});
+            }
+            try stderr.writeAll("]\n");
+        }
+    }
     if (concat_list_.items.len == 0) {
         return error.CannotReduceEmptyConcatList;
     }
@@ -434,13 +527,7 @@ pub fn reduce
             },
             .Parameter => |par| {
                 if (ctx_.expr_args) |args| {
-                    const c_list = blk: {
-                        const arg = args.get(par) orelse return error.InvalidMacroParameter;
-                        switch (arg) {
-                            .CList => |c_list| break :blk c_list,
-                            .BatchPlaceholder => break :blk ctx_.batch_args.?.items[args.getIndex(par).?],
-                        }
-                    };
+                    const c_list = args.get(par) orelse return error.InvalidMacroParameter;
                     const did_reduce = try reduce(allocator_, c_list, result_, has_accessors or init_res, accessors_, ctx_);
                     if (has_accessors) {
                         return did_reduce;
@@ -450,7 +537,7 @@ pub fn reduce
                 }
             },
             .Expression => |exp| {
-                const did_evaluate = try exp.evaluate(allocator_, result_, has_accessors or init_res, accessors_, ctx_.macros);
+                const did_evaluate = try exp.evaluate(allocator_, result_, has_accessors or init_res, accessors_, ctx_);
                 if (has_accessors) {
                     return did_evaluate;
                 }
@@ -477,6 +564,7 @@ pub const StackElem = union(enum) {
         try value.log(writer, 0);
     }
     pub fn log(self: StackElem, writer: anytype, indent: usize) std.os.WriteError!void {
+        if (!util.DEBUG) return;
         switch (self) {
             .TopLevelObject => |obj| {
                 const o = ZValue{ .Object = obj };
@@ -656,7 +744,7 @@ test "macro expression evaluation - no accessors no batching" {
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -704,7 +792,7 @@ test "macro expression object single accessor evaluation - no batching" {
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -752,7 +840,7 @@ test "macro expression array single accessor evaluation - no batching" {
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -809,7 +897,7 @@ test "macro expression multiple accessor evaluation - no batching" {
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -848,7 +936,7 @@ test "macro expression with default value evaluation - no accessors no batching"
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -901,7 +989,7 @@ test "batched macro expression evaluation - no accessors" {
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -970,7 +1058,7 @@ test "batched macro expression evaluation" {
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, macros);
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -979,6 +1067,96 @@ test "batched macro expression evaluation" {
     try std.testing.expectEqual(@as(usize, 2), result.Array.items.len);
     try std.testing.expectEqualStrings("#00000007ff", result.Array.items[0].String.items);
     try std.testing.expectEqualStrings("#000000ffff", result.Array.items[1].String.items);
+}
+
+test "crazy batched macro expression inside another macro expression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+
+    // macro a
+    // $macro_a(a, b, c, d = "AF") = %a + %b + %c + %d
+    var a_val = ConcatList.init(&arena.allocator);
+    try a_val.append(.{ .Parameter = "a" });
+    try a_val.append(.{ .Parameter = "b" });
+    try a_val.append(.{ .Parameter = "c" });
+    try a_val.append(.{ .Parameter = "d" });
+    var a_params = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    try a_params.putNoClobber("a", null);
+    try a_params.putNoClobber("b", null);
+    try a_params.putNoClobber("c", null);
+    var d_par_def = ConcatList.init(&arena.allocator);
+    try d_par_def.append(.{ .String = "AF" });
+    try a_params.putNoClobber("d", d_par_def);
+    const macro_a = ZMacro{ .parameters = a_params, .value = a_val };
+    try macros.putNoClobber("macro_a", macro_a);
+
+    // macro b
+    // $macro_b(param) = {
+    //     key = $macro_a(%param, ?, "Hello, World!") % [
+    //         [ 100 ] [ %param ] [ 10000 ]
+    //     ]
+    // }
+    var arg_1 = ConcatList.init(&arena.allocator);
+    try arg_1.append(.{ .Parameter = "param" });
+    var arg_3 = ConcatList.init(&arena.allocator);
+    try arg_3.append(.{ .String = "Hello, World!" });
+    var args_a = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    try args_a.putNoClobber("a", .{ .CList = arg_1 });
+    try args_a.putNoClobber("b", .BatchPlaceholder);
+    try args_a.putNoClobber("c", .{ .CList = arg_3 });
+    var batch_1 = ConcatList.init(&arena.allocator);
+    try batch_1.append(.{ .String = "100" });
+    var batch_set_1 = std.ArrayList(ConcatList).init(&arena.allocator);
+    try batch_set_1.append(batch_1);
+    var batch_2 = ConcatList.init(&arena.allocator);
+    try batch_2.append(.{ .Parameter = "param" });
+    var batch_set_2 = std.ArrayList(ConcatList).init(&arena.allocator);
+    try batch_set_2.append(batch_2);
+    var batch_3 = ConcatList.init(&arena.allocator);
+    try batch_3.append(.{ .String = "10000" });
+    var batch_set_3 = std.ArrayList(ConcatList).init(&arena.allocator);
+    try batch_set_3.append(batch_3);
+    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(&arena.allocator);
+    try batch_args_list.append(batch_set_1);
+    try batch_args_list.append(batch_set_2);
+    try batch_args_list.append(batch_set_3);
+    const key_expr = ZExpr{ .key = "macro_a", .args = args_a, .batch_args_list = batch_args_list };
+    var key_val = ConcatList.init(&arena.allocator);
+    try key_val.append(.{ .Expression = key_expr });
+    var obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    try obj.Object.putNoClobber("key", key_val );
+    var b_val = ConcatList.init(&arena.allocator);
+    try b_val.append(obj);
+    var b_params = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    try b_params.putNoClobber("param", null);
+    const macro_b = ZMacro{ .parameters = b_params, .value = b_val };
+    try macros.putNoClobber("macro_b", macro_b);
+
+    // expression
+    // $macro_b("Zooce")
+    var param = ConcatList.init(&arena.allocator);
+    try param.append(.{ .String = "Zooce" });
+    var args_b = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    try args_b.putNoClobber("param", .{ .CList = param });
+    const expr = ZExpr{ .key = "macro_b", .args = args_b };
+
+    // evaluate the expression
+    var result: ZValue = undefined;
+    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    try std.testing.expect(did_evaluate);
+
+    // test the result
+    // { key = [ "Zooce100Hello, WorldAF", "ZooceZooceHello, WorldAF", "Zooce10000Hello, WorldAF" ] }
+    try std.testing.expect(result == .Object);
+    try std.testing.expectEqual(@as(usize, 1), result.Object.count());
+    const key_arr = result.Object.get("key") orelse return error.KeyNotFound;
+    try std.testing.expect(key_arr == .Array);
+    try std.testing.expectEqual(@as(usize, 3), key_arr.Array.items.len);
+    try std.testing.expectEqualStrings("Zooce100Hello, World!AF", key_arr.Array.items[0].String.items);
+    try std.testing.expectEqualStrings("ZooceZooceHello, World!AF", key_arr.Array.items[1].String.items);
+    try std.testing.expectEqualStrings("Zooce10000Hello, World!AF", key_arr.Array.items[2].String.items);
 }
 
 test "debug printing" {

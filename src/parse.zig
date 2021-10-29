@@ -1,8 +1,9 @@
 const std = @import("std");
 
+const util = @import("util.zig");
+
 const Tokenizer = @import("token.zig").Tokenizer;
 const Token = @import("token.zig").Token;
-// const State = @import("state_machine.zig").State;
 const StateMachine = @import("state_machine.zig").StateMachine;
 
 const ZValue = @import("data.zig").ZValue;
@@ -74,16 +75,16 @@ pub const Parser = struct {
 
     fn consumeAtTopLevel(self: *Self, allocator_: *std.mem.Allocator) !void {
         if (self.macro_validator) |*macro_validator| {
-            std.debug.print("...consuming macro declaration...\n", .{});
+            // std.debug.print("...consuming macro declaration...\n", .{});
             defer macro_validator.deinit();
             try macro_validator.validate();
             const c_list = self.stack.pop().CList;
             const params = self.stack.pop().ParamMap;
             const key = self.stack.pop().Key;
-            try self.macros.putNoClobber(key, .{ .key = key, .parameters = params, .value = c_list });
+            try self.macros.putNoClobber(key, .{ .parameters = params, .value = c_list });
         }
         if (self.stack.items.len > 1) {
-            std.debug.print("...consuming top-level object...\n", .{});
+            // std.debug.print("...consuming top-level object...\n", .{});
             const c_list = self.stack.pop().CList;
             defer c_list.deinit();
             const key = self.stack.pop().Key;
@@ -248,8 +249,9 @@ pub const Parser = struct {
             .ObjectBegin => {
                 try self.stack.append(.{ .CItem = .{ .Object = std.StringArrayHashMap(ConcatList).init(&self.arena.allocator) } });
             },
-            .Key => if (self.token.?.token_type == .String) {
-                try self.stack.append(.{ .Key = token_slice });
+            .Key => switch (self.token.?.token_type) {
+                .String => try self.stack.append(.{ .Key = token_slice }),
+                else => keep_token = true,
             },
             .ConsumeObjectEntry => keep_token = true,
             .ObjectEnd => if (self.token.?.token_type == .String) {
@@ -371,6 +373,7 @@ pub const Parser = struct {
 
     // TODO: This is for prototyping only -- remove before release
     pub fn log(self: Self, count_: usize, tag_: []const u8) !void {
+        if (!util.DEBUG) return;
         std.debug.print(
             \\
             \\=====[[ {s} {} ]]=====
@@ -423,13 +426,15 @@ const StringReader = @import("string_reader.zig").StringReader;
 const StringParser = Parser(StringReader, 32);
 
 fn parseTestInput(input_: []const u8) !Zomb {
-    std.debug.print(
-        \\
-        \\----[Test Input]----
-        \\{s}
-        \\
-        , .{ input_ }
-    );
+    if (util.DEBUG) {
+        std.debug.print(
+            \\
+            \\----[Test Input]----
+            \\{s}
+            \\
+            , .{ input_ }
+        );
+    }
     var parser = Parser.init(input_, testing.allocator);
     defer parser.deinit();
 
