@@ -30,12 +30,13 @@ pub const ZValue = union(enum) {
             .Array => |arr| {
                 try writer.writeAll("ZValue.Array = [\n");
                 for (arr.items) |item| {
+                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
                     try item.log(writer, indent + 1);
                 }
                 try writer.writeByteNTimes(' ', indent * 2);
                 try writer.writeAll("]\n");
             },
-            .String => |str| try writer.print("ZValue.String = {s}\n", .{str}),
+            .String => |str| try writer.print("ZValue.String = {s}\n", .{str.items}),
         }
     }
 
@@ -553,6 +554,7 @@ pub const StackElem = union(enum) {
     Key: []const u8,
     CList: ConcatList,
     CItem: ConcatItem,
+    Placeholder: void,
     ExprArgList: std.ArrayList(ZExprArg),
     BSet: std.ArrayList(std.ArrayList(ConcatList)),
     ParamMap: ?std.StringArrayHashMap(?ConcatList),
@@ -575,6 +577,7 @@ pub const StackElem = union(enum) {
                 try logConcatList(l, writer, indent);
             },
             .CItem => |c| try c.log(writer, indent),
+            .Placeholder => try writer.writeAll("Placeholder\n"),
             .ExprArgList => |elist| {
                 try writer.writeAll("ExprArgList = [\n");
                 for (elist.items) |eitem| {
@@ -583,7 +586,20 @@ pub const StackElem = union(enum) {
                 }
                 try writer.writeAll("]\n");
             },
-            .BSet => try writer.writeAll("BSet = TODO\n"),
+            .BSet => |bset| {
+                try writer.writeAll("BSet = [\n");
+                for (bset.items) |arr| {
+                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
+                    try writer.writeAll("[\n");
+                    for (arr.items) |item| {
+                        try writer.writeByteNTimes(' ', (indent + 2) * 2);
+                        try logConcatList(item, writer, indent + 2);
+                    }
+                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
+                    try writer.writeAll("]\n");
+                }
+                try writer.writeAll("]\n");
+            },
             .ParamMap => |pm| {
                 if (pm) |map| {
                     try writer.writeAll("ParamMap = {\n");
@@ -599,7 +615,7 @@ pub const StackElem = union(enum) {
                     }
                     try writer.writeAll("}\n");
                 } else {
-                    try writer.writeAll("ParamMap = null");
+                    try writer.writeAll("ParamMap = null\n");
                 }
             },
             .MacroDeclParam => |p| try writer.print("MacroDeclParam = {s}\n", .{p}),

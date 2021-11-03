@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util.zig");
 // const Scanner = @import("scan.zig").Scanner;
 
 /// These are the delimiters that will be used as tokens.
@@ -89,12 +90,6 @@ pub const Token = struct {
     /// The number of bytes in this token.
     size: usize = 0,
 
-    /// Since the Tokenizer is capable of handling streaming input, it's possible that a token may
-    /// span multiple buffers, so we keep track of this. In this situation, it is still the caller's
-    /// responsibility to use this information correctly.
-    start_buffer: usize = undefined,
-    end_buffer: usize = undefined,
-
     /// The line in the file where this token was discovered. This is based on the number of
     /// newline tokens the Tokenizer has encountered. If the calling code has altered the cursor
     line: usize = undefined,
@@ -105,15 +100,10 @@ pub const Token = struct {
     /// Whether this token is a valid ZOMB token.
     is_valid: bool = false,
 
-    // TODO: is_partial: bool = false, // token is valid, but ended at the EOF
-
     const Self = @This();
 
     /// Given the original input, return the slice of that input which this token represents.
     pub fn slice(self: Self, buffer_: []const u8) ![]const u8 {
-        if (self.start_buffer != self.end_buffer) {
-            std.log.warn("Token spans multiple buffers!", .{});
-        }
         if (self.offset > buffer_.len) {
             return error.TokenOffsetTooBig;
         }
@@ -121,6 +111,24 @@ pub const Token = struct {
             return error.TokenSizeTooBig;
         }
         return buffer_[self.offset .. self.offset + self.size];
+    }
+
+    pub fn log(self: Self, writer_: anytype, input_: []const u8) anyerror!void {
+        if (!util.DEBUG) return;
+        try writer_.print(
+            \\----[Token]----
+            \\Type  = {}
+            \\Value = {s}
+            \\Line  = {}
+            \\Valid = {}
+            \\
+            , .{
+                self.token_type,
+                try self.slice(input_),
+                self.line,
+                self.is_valid,
+            }
+        );
     }
 };
 
@@ -154,6 +162,24 @@ pub const Tokenizer = struct {
     /// The token currently being discovered
     token: Token = Token{},
 
+    pub fn log(self: Self, writer_: anytype) std.os.WriteError!void {
+        if (!util.DEBUG) return;
+        try writer_.print(
+            \\----[Tokenizer]----
+            \\State = {}
+            \\Stage = {}
+            \\Line = {}
+            \\End = {}
+            \\
+            , .{
+                self.state,
+                self.state_stage,
+                self.current_line,
+                self.at_end_of_buffer,
+            }
+        );
+    }
+
     pub fn init(buffer_: []const u8) Self {
         return Self{
             .buffer = buffer_,
@@ -163,17 +189,14 @@ pub const Tokenizer = struct {
     fn tokenComplete(self: *Self) void {
         self.state = State.None;
         self.token.is_valid = true;
-        self.token.end_buffer = self.buffer_index;
     }
 
     fn tokenMaybeComplete(self: *Self) void {
         self.token.is_valid = true;
-        self.token.end_buffer = self.buffer_index;
     }
 
     fn tokenNotComplete(self: *Self) void {
         self.token.is_valid = false;
-        self.token.end_buffer = undefined;
     }
 
     /// Get the next token. Cases where a valid token is not found indicate that either EOF has been
@@ -195,12 +218,11 @@ pub const Tokenizer = struct {
 
             switch (self.state) {
                 .None => {
-                    if ((try self.skipSeparators()) == false) return self.token;
+                    if ((try self.skipSeparators()) == false) return null;
 
                     self.token = Token{
                         .offset = self.buffer_cursor,
                         .line = self.current_line,
-                        .start_buffer = self.buffer_index,
                     };
                     self.state_stage = 0;
 
@@ -349,7 +371,6 @@ pub const Tokenizer = struct {
                         self.token = Token{
                             .offset = self.buffer_cursor,
                             .line = self.current_line,
-                            .start_buffer = self.buffer_index,
                             .token_type = TokenType.RawString,
                         };
 
@@ -572,9 +593,6 @@ const test_allocator = testing.allocator;
 /// A structure describing the expected token.
 const ExpectedToken = struct {
     str: []const u8,
-    // most tests will have a single buffer, so make that the default
-    start_buffer: usize = 0,
-    end_buffer: usize = 0,
     line: usize,
     token_type: TokenType,
     // most tests should expect the token to be valid, so make that the default
@@ -585,12 +603,6 @@ fn expectToken(expected_token_: ExpectedToken, token_: Token, orig_str_: []const
     const str = try token_.slice(orig_str_);
     var ok = true;
     testing.expectEqualStrings(expected_token_.str, str) catch {
-        ok = false;
-    };
-    testing.expectEqual(expected_token_.start_buffer, token_.start_buffer) catch {
-        ok = false;
-    };
-    testing.expectEqual(expected_token_.end_buffer, token_.end_buffer) catch {
         ok = false;
     };
     testing.expectEqual(expected_token_.line, token_.line) catch {

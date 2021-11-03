@@ -2,14 +2,13 @@
 //  EX:  theme = $name
 //  EX:  settings = $white_foreground
 $name = "Zooce Dark"
-$white_foreground = {
-    foreground = $colors.white
-}
-
 $colors = {
     black = #2b2b2b
     white = #f2f2f2
     red = #ff0000
+}
+$white_foreground = {
+    foreground = $colors.white
 }
 
 // Variable Function
@@ -54,6 +53,11 @@ tokenColors = [
         scope = support
         settings = $foreground($colors.red)
     }
+] + $scope_def(?, $foreground($colors.black)) % [
+    [ comments ]
+    [ "zig.entity" ]
+    [ python ]
+    [ "c++" ]
 ]
 
 multi-line-string = \\hello my friends
@@ -61,13 +65,13 @@ multi-line-string = \\hello my friends
                     \\file format?"
 
 $one = Cool
+$m2(a) = %a
 $m1(one two) = { // macro with paramters
     hello = %one // use the value of the parameter
     goodbye = [ 42 // the answer
         %two ]
     dude = $m2($one) // $one is another macro expr, not our parameter
 }
-$m2(a) = %a
 $"hi.dude" = this // macro without parameters
 // Did you notice you can have comments?
 cool = {

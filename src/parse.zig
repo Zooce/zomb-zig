@@ -107,6 +107,12 @@ pub const Parser = struct {
         // add the implicit top-level object to our type stack
         try self.stack.append(.{ .TopLevelObject = std.StringArrayHashMap(ZValue).init(&out_arena.allocator) });
 
+        errdefer {
+            if (self.token) |token| {
+                std.debug.print("Last Token = {}\n", .{token});
+            }
+        }
+
         var count: usize = 0;
         var done = false;
         while (!done) {
@@ -171,11 +177,19 @@ pub const Parser = struct {
                 var param_map = &self.stack.items[self.stack.items.len - 1].ParamMap;
                 try param_map.*.?.putNoClobber(param, param_default);
             },
-            .ConsumeMacroExprArgs => {
-                const expr_arg_list = self.stack.pop().ExprArgList;
-                defer expr_arg_list.deinit();
+            .ConsumeMacroExprArgsOrBatchList => {
+                const top = self.stack.pop();
                 var expr = &self.stack.items[self.stack.items.len - 1].CItem.Expression;
-                try expr.*.setArgs(&self.arena.allocator, expr_arg_list, self.macros);
+                switch (top) {
+                    .ExprArgList => |expr_arg_list| {
+                        defer expr_arg_list.deinit();
+                        try expr.*.setArgs(&self.arena.allocator, expr_arg_list, self.macros);
+                    },
+                    .BSet => |batch_set| {
+                        expr.*.batch_args_list = batch_set;
+                    },
+                    else => return error.UnexpectedStackElemDuringMacroExprArgsOrBatchListConsumption,
+                }
             },
             .ConsumeMacroExprBatchArgsList => {
                 const batch = self.stack.pop().BSet;
@@ -183,10 +197,16 @@ pub const Parser = struct {
                 expr.*.batch_args_list = batch;
             },
             .ConsumeMacroExprArg => {
-                const c_list = self.stack.pop().CList;
-                errdefer c_list.deinit();
+                const arg = self.stack.pop();
                 var expr_args = &self.stack.items[self.stack.items.len - 1].ExprArgList;
-                try expr_args.*.append(.{ .CList = c_list });
+                switch (arg) {
+                    .CList => |c_list| {
+                        errdefer c_list.deinit();
+                        try expr_args.*.append(.{ .CList = c_list });
+                    },
+                    .Placeholder => try expr_args.*.append(.BatchPlaceholder),
+                    else => return error.UnexpectedStackElemDuringMacroExprArgConsumption,
+                }
             },
             .ConsumeMacroExprBatchArgs => {
                 const batch_args = self.stack.pop().CItem.Array;
@@ -213,8 +233,8 @@ pub const Parser = struct {
             },
             .Equals => {}, // handled in .ValueEnter
             .ValueEnter => {
-                // don't add the CList for an empty array
-                if (self.token.?.token_type != .CloseSquare) {
+                // don't add the CList for an empty array or a batch placeholder
+                if (self.token.?.token_type != .CloseSquare and self.token.?.token_type != .Question) {
                     try self.stack.append(.{ .CList = ConcatList.init(&self.arena.allocator) });
                 }
                 keep_token = true;
@@ -237,6 +257,7 @@ pub const Parser = struct {
                             return error.MacroParamKeyUsedOutsideMacroDecl;
                         }
                     },
+                    .Question => try self.stack.append(.Placeholder),
                     .MacroKey, .OpenCurly, .OpenSquare, .CloseSquare => keep_token = true,
                     else => {},
                 }
@@ -324,7 +345,7 @@ pub const Parser = struct {
                 }
                 keep_token = true;
             },
-            .ConsumeMacroExprArgs => {
+            .ConsumeMacroExprArgsOrBatchList => {
                 keep_token = true;
             },
             .MacroExprAccessors => switch (self.token.?.token_type) {
@@ -356,6 +377,7 @@ pub const Parser = struct {
             .MacroExprBatchListBegin => {
                 try self.stack.append(.{ .BSet = std.ArrayList(std.ArrayList(ConcatList)).init(&self.arena.allocator) });
             },
+            .MacroExprBatchArgsBegin => keep_token = true,
             .ConsumeMacroExprBatchArgs => {
                 keep_token = true;
             },
@@ -367,6 +389,7 @@ pub const Parser = struct {
         try self.state_machine.transition(self.token.?.token_type);
         // get a new token if necessary - we must do this _after_ the state machine transition
         if (!keep_token) {
+            if (util.DEBUG) std.debug.print("getting new token...\n", .{});
             self.token = try self.tokenizer.next();
         }
     }
@@ -374,42 +397,35 @@ pub const Parser = struct {
     // TODO: This is for prototyping only -- remove before release
     pub fn log(self: Self, count_: usize, tag_: []const u8) !void {
         if (!util.DEBUG) return;
-        std.debug.print(
+        const held = std.debug.getStderrMutex().acquire();
+        defer held.release();
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print(
             \\
             \\=====[[ {s} {} ]]=====
-            \\----[Token]----
-            \\Type  = {}
-            \\Value = {s}
-            \\Line  = {}
             \\
-            , .{
-                tag_,
-                count_,
-                if (self.token) |t| t.token_type else .None,
-                if (self.token) |t| try t.slice(self.input) else "",
-                if (self.token) |t| t.line else 0,
-            }
+            , .{ tag_, count_ }
         );
-        self.state_machine.log();
-        std.debug.print(
-            \\----[Macros]----
-            \\
-            , .{}
-        );
+        if (self.token) |token| {
+            try token.log(stderr, self.input);
+        } else {
+            try stderr.writeAll("----[Token]----\nnull\n");
+        }
+        // try self.tokenizer.log(stderr);
+        try self.state_machine.log(stderr);
+
+        try stderr.writeAll("----[Macros]----\n");
         var iter = self.macros.iterator();
         while (iter.next()) |entry| {
-            std.debug.print("{s} = {struct}", .{entry.key_ptr.*, entry.value_ptr.*});
+            try stderr.print("{s} = {struct}", .{entry.key_ptr.*, entry.value_ptr.*});
         }
 
-        std.debug.print(
-            \\----[Parse Stack]----
-            \\
-            , .{}
-        );
+        try stderr.writeAll("----[Parse Stack]----\n");
         for (self.stack.items) |stack_elem| {
-            std.debug.print("{union}", .{stack_elem});
+            try stderr.print("{union}", .{stack_elem});
         }
-        std.debug.print("\n", .{});
+
+        try stderr.writeAll("\n");
     }
 };
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const TokenType = @import("token.zig").TokenType;
 const testing = std.testing;
+const util = @import("util.zig");
 
 const StackWidth = u128;
 const StackElemWidth = u4; // TODO: we have an extra bit here so it's easier to debug - change this to u3 later?
@@ -8,13 +9,14 @@ const STACK_SHIFT = @bitSizeOf(StackElemWidth);
 pub const MAX_STACK_SIZE = @bitSizeOf(StackWidth) / STACK_SHIFT; // add more stacks if we need more?
 
 pub const State = enum {
-    ObjectBegin,
-    ArrayBegin,
-    MacroExprKey,
-    MacroExprArgsBegin,
-    MacroDeclParam,
-    MacroExprBatchListBegin,
-    Value,
+    ObjectBegin,                // 0
+    ArrayBegin,                 // 1
+    MacroExprKey,               // 2
+    MacroExprArgsBegin,         // 3
+    MacroDeclParam,             // 4
+    MacroExprBatchListBegin,    // 5
+    MacroExprBatchArgsBegin,    // 6
+    Value,                      // 7
 
     Decl,
     Key,
@@ -36,7 +38,7 @@ pub const State = enum {
     MacroDeclParamsEnd,
 
     MacroExprOptionalArgsOrAccessors,
-    ConsumeMacroExprArgs,
+    ConsumeMacroExprArgsOrBatchList,
     MacroExprOptionalAccessors,
     MacroExprAccessors,
     MacroExprOptionalBatch,
@@ -69,6 +71,7 @@ pub const StateMachine = struct {
             .MacroExprArgsBegin,
             .MacroDeclParam,
             .MacroExprBatchListBegin,
+            .MacroExprBatchArgsBegin,
             .Value, => {},
             else => return error.BadStatePush,
         }
@@ -91,10 +94,11 @@ pub const StateMachine = struct {
                 self.state = switch (state) {
                     .ObjectBegin => .ConsumeObjectEntry,
                     .ArrayBegin => .ConsumeArrayItem,
-                    .MacroExprKey => .ConsumeMacroExprArgs,
+                    .MacroExprKey => .ConsumeMacroExprArgsOrBatchList,
                     .MacroExprArgsBegin => .ConsumeMacroExprArg,
                     .MacroDeclParam => .ConsumeMacroDeclDefaultParam,
                     .MacroExprBatchListBegin => .ConsumeMacroExprBatchArgsList,
+                    .MacroExprBatchArgsBegin => .ConsumeMacroExprBatchArgs,
                     .Value => .ValueConcat,
                     else => return error.UnexpectedStateOnStack,
                 };
@@ -113,8 +117,8 @@ pub const StateMachine = struct {
         return @intToEnum(State, self.stack & 0b1111);
     }
 
-    pub fn log(self: Self) void {
-        std.debug.print(
+    pub fn log(self: Self, writer_: anytype) std.os.WriteError!void {
+        try writer_.print(
             \\----[State Machine]----
             \\State = {}
             \\Stack = 0x{X:0>32}
@@ -127,6 +131,9 @@ pub const StateMachine = struct {
     /// Transition the state machine to the next state. This will catch all the
     /// expected token type errors.
     pub fn transition(self: *Self, token_: TokenType) !void {
+        if (util.DEBUG) {
+            std.debug.print("{} --({})--> ", .{self.state, token_});
+        }
         // we can still transition even if the token type is .None
         switch (self.state) {
             .Decl => self.state = switch (token_) {
@@ -147,6 +154,7 @@ pub const StateMachine = struct {
                 .MacroKey => try self.push(.MacroExprKey),
                 .OpenCurly => try self.push(.ObjectBegin),
                 .OpenSquare => try self.push(.ArrayBegin),
+                .Question => try self.pop(), // we forbid placeholder concatenation....TODO: do we really need to?
                 else => return error.UnexpectedValueToken,
             },
             .ValueConcat => switch (token_) {
@@ -233,7 +241,7 @@ pub const StateMachine = struct {
                 .OpenParen => try self.push(.MacroExprArgsBegin),
                 else => self.state = .MacroExprOptionalBatch,
             },
-            .ConsumeMacroExprArgs => self.state = .MacroExprOptionalAccessors,
+            .ConsumeMacroExprArgsOrBatchList => self.state = .MacroExprOptionalAccessors,
             .MacroExprOptionalAccessors => self.state = switch (token_) {
                 .MacroAccessor => .MacroExprAccessors,
                 else => .MacroExprOptionalBatch,
@@ -259,16 +267,27 @@ pub const StateMachine = struct {
                 else => self.state = .ValueEnter,
             },
 
-            // Macro Expr Batch List
+            // Macro Expr Batch List (outter array)
             .MacroExprBatchListBegin => switch (token_) {
-                .OpenSquare => try self.push(.ArrayBegin),
+                .OpenSquare => try self.push(.MacroExprBatchArgsBegin),
                 else => return error.UnexpectedMacroExprBatchListBeginToken,
             },
-            .ConsumeMacroExprBatchArgs => self.state = .MacroExprBatchListEnd,
+            // Macro Expr Batch Args (inner arrays)
+            .MacroExprBatchArgsBegin => switch (token_) {
+                .OpenSquare => try self.push(.ArrayBegin),
+                else => return error.UnexpectedMacroExprBatchArgsBegin,
+            },
+            .ConsumeMacroExprBatchArgs => {
+                try self.pop();
+                self.state = .MacroExprBatchListEnd;
+            },
             .MacroExprBatchListEnd => switch (token_) {
                 .CloseSquare => try self.pop(),
-                else => try self.push(.ArrayBegin),
+                else => try self.push(.MacroExprBatchArgsBegin),
             },
+        }
+        if (util.DEBUG) {
+            std.debug.print("{}\n", .{self.state});
         }
     }
 };

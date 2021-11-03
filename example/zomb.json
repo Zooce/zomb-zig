@@ -3,24 +3,57 @@
     "name": "Zooce Dark",
     "type": "Dark",
     "colors": {
-        "editor.foreground": "MACRO-EXPR",
-        "editor.background": "MACRO-EXPR"
+        "editor.foreground": "#f2f2f2",
+        "editor.background": "#2b2b2b"
     },
     "tokenColors": [
         {
             "scope": "punctuation.definition.arguments",
             "settings": {
-                "foreground": "MACRO-EXPR"
+                "foreground": "#f2f2f2"
             }
         },
-        "MACRO-EXPR",
+        {
+            "scope": "punctuation.definition.type",
+            "settings": {
+                "foreground": "#ff0000"
+            }
+        },
         {
             "scope": "string",
-            "settings": "MACRO-EXPR"
+            "settings": {
+                "foreground": "#00ff00"
+            }
         },
         {
             "scope": "support",
-            "settings": "MACRO-EXPR"
+            "settings": {
+                "foreground": "#ff0000"
+            }
+        },
+        {
+            "scope": "comments",
+            "settings": {
+                "foreground": "#2b2b2b"
+            }
+        },
+        {
+            "scope": "zig.entity",
+            "settings": {
+                "foreground": "#2b2b2b"
+            }
+        },
+        {
+            "scope": "python",
+            "settings": {
+                "foreground": "#2b2b2b"
+            }
+        },
+        {
+            "scope": "c++",
+            "settings": {
+                "foreground": "#2b2b2b"
+            }
         }
     ],
     "multi-line-string": "hello my friends\n what's up with this crazy\nfile format?\"",
@@ -29,8 +62,18 @@
             "800",
             "900"
         ],
-        "this": "MACRO-EXPR",
-        "wh.at": "MACRO-EXPR",
+        "this": "this",
+        "wh.at": [
+            "42",
+            {
+                "hello": "a",
+                "goodbye": [
+                    "42",
+                    "b"
+                ],
+                "dude": "Cool"
+            }
+        ],
         "oh_yea": {
             "thing": "cool = {\n    ports = [ 800 900 ]\n    this = $\"hi.dude\"\n    what = $m1( 0 $m1( a b ) ).goodbye\n    oh_yea = { thing = \"nope\" }\n}\n$hi = this // hi there!\n$m1(one two) = {\n    hello = %one\n    goodbye = %two\n}"
         }
