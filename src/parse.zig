@@ -458,125 +458,123 @@ fn parseTestInput(input_: []const u8) !Zomb {
 }
 
 fn doZValueStringTest(expected_: []const u8, actual_: ZValue) !void {
-    switch (actual_) {
-        .String => |str| try testing.expectEqualStrings(expected_, str.items),
-        else => return error.UnexpectedValue,
-    }
+    try testing.expect(actual_ == .String);
+    try testing.expectEqualStrings(expected_, actual_.String.items);
 }
 
 test "bare string value" {
-    const input = "key = value";
+    const input = "hi = value";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("value", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("value", hi);
 }
 
 test "empty quoted string value" {
-    const input = "key = \"\"";
+    const input = "hi = \"\"";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("", hi);
 }
 
 test "quoted string value" {
-    const input = "key = \"value\"";
+    const input = "hi = \"value\"";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("value", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("value", hi);
 }
 
 test "empty raw string value" {
-    const input = "key = \\\\";
+    const input = "hi = \\\\";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("", hi);
 }
 
 test "one line raw string value" {
-    const input = "key = \\\\value";
+    const input = "hi = \\\\value";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("value", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("value", hi);
 }
 
 test "two line raw string value" {
     const input =
-        \\key = \\one
-        \\      \\two
+        \\hi = \\one
+        \\     \\two
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("one\ntwo", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("one\ntwo", hi);
 }
 
 test "raw string value with empty newline in the middle" {
     const input =
-        \\key = \\one
-        \\      \\
-        \\      \\two
+        \\hi = \\one
+        \\     \\
+        \\     \\two
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("one\n\ntwo", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("one\n\ntwo", hi);
 }
 
 test "bare string concatenation" {
-    const input = "key = one + two + three";
+    const input = "hi = one + two + three";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("onetwothree", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("onetwothree", hi);
 }
 
 test "quoted string concatenation" {
     const input =
-        \\key = "one " + "two " + "three"
+        \\hi = "one " + "two " + "three"
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("one two three", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("one two three", hi);
 }
 
 test "raw string concatenation" {
     const input =
-        \\key = \\part one
-        \\      \\
-        \\    + \\part two
+        \\hi = \\part one
+        \\     \\
+        \\   + \\part two
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("part one\npart two", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("part one\npart two", hi);
 }
 
 test "general string concatenation" {
     const input =
-        \\key = bare_string + "quoted string" + \\raw
-        \\                                      \\string
+        \\hi = bare_string + "quoted string" + \\raw
+        \\                                     \\string
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    try doZValueStringTest("bare_stringquoted stringraw\nstring", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("bare_stringquoted stringraw\nstring", hi);
 }
 
 test "quoted key" {
@@ -586,27 +584,23 @@ test "quoted key" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("quoted key") orelse return error.KeyNotFound;
-    try doZValueStringTest("value", entry.value_ptr.*);
+    const value = z.map.get("quoted key") orelse return error.KeyNotFound;
+    try doZValueStringTest("value", value);
 }
 
 test "empty object value" {
-    const input = "key = {}";
+    const input = "hi = {}";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Object => |obj| {
-            try testing.expectEqual(@as(usize, 0), obj.count());
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Object);
+    try testing.expectEqual(@as(usize, 0), hi.Object.count());
 }
 
 test "basic object value" {
     const input =
-        \\key = {
+        \\hi = {
         \\    a = hello
         \\    b = goodbye
         \\}
@@ -614,22 +608,17 @@ test "basic object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Object => |obj| {
-            const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
-            try doZValueStringTest("hello", entry_a.value_ptr.*);
-
-            const entry_b = obj.getEntry("b") orelse return error.KeyNotFound;
-            try doZValueStringTest("goodbye", entry_b.value_ptr.*);
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Object);
+    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    try doZValueStringTest("hello", a);
+    const b = hi.Object.get("b") orelse return error.KeyNotFound;
+    try doZValueStringTest("goodbye", b);
 }
 
 test "nested object value" {
     const input =
-        \\key = {
+        \\hi = {
         \\    a = {
         \\        b = value
         \\    }
@@ -638,170 +627,118 @@ test "nested object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Object => |obj_a| {
-            const entry_a = obj_a.getEntry("a") orelse return error.KeyNotFound;
-            switch (entry_a.value_ptr.*) {
-                .Object => |obj_b| {
-                    const entry_b = obj_b.getEntry("b") orelse return error.KeyNotFound;
-                    try doZValueStringTest("value", entry_b.value_ptr.*);
-                },
-                else => return error.UnexpectedValue,
-            }
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Object);
+    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    try testing.expect(a == .Object);
+    const b = a.Object.get("b") orelse return error.KeyNotFound;
+    try doZValueStringTest("value", b);
 }
 
 // TODO: object + object concatenation
 
 test "empty array value" {
-    const input = "key = []";
+    const input = "hi = []";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Array => |arr| {
-            try testing.expectEqual(@as(usize, 0), arr.items.len);
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Array);
+    try testing.expectEqual(@as(usize, 0), hi.Array.items.len);
 }
 
 test "basic array value" {
-    const input = "key = [ a b c ]";
+    const input = "hi = [ a b c ]";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Array => |arr| {
-            try testing.expectEqual(@as(usize, 3), arr.items.len);
-            try doZValueStringTest("a", arr.items[0]);
-            try doZValueStringTest("b", arr.items[1]);
-            try doZValueStringTest("c", arr.items[2]);
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Array);
+    try testing.expectEqual(@as(usize, 3), hi.Array.items.len);
+    try doZValueStringTest("a", hi.Array.items[0]);
+    try doZValueStringTest("b", hi.Array.items[1]);
+    try doZValueStringTest("c", hi.Array.items[2]);
 }
 
 test "nested array value" {
     const input =
-        \\key = [
+        \\hi = [
         \\    [ a b c ]
         \\]
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Array => |arr| {
-            try testing.expectEqual(@as(usize, 1), arr.items.len);
-            switch (arr.items[0]) {
-                .Array => |arr_inner| {
-                    try testing.expectEqual(@as(usize, 3), arr_inner.items.len);
-                    try doZValueStringTest("a", arr_inner.items[0]);
-                    try doZValueStringTest("b", arr_inner.items[1]);
-                    try doZValueStringTest("c", arr_inner.items[2]);
-                },
-                else => return error.UnexpectedValue,
-            }
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Array);
+    try testing.expectEqual(@as(usize, 1), hi.Array.items.len);
+    const inner = hi.Array.items[0];
+    try testing.expect(inner == .Array);
+    try testing.expectEqual(@as(usize, 3), inner.Array.items.len);
+    try doZValueStringTest("a", inner.Array.items[0]);
+    try doZValueStringTest("b", inner.Array.items[1]);
+    try doZValueStringTest("c", inner.Array.items[2]);
 }
 
 // TODO: array + array concatenation
 
 test "array in an object" {
     const input =
-        \\key = {
+        \\hi = {
         \\    a = [ 1 2 3 ]
         \\}
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Object => |obj| {
-            const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
-            switch (entry_a.value_ptr.*) {
-                .Array => |arr| {
-                    try testing.expectEqual(@as(usize, 3), arr.items.len);
-                    try doZValueStringTest("1", arr.items[0]);
-                    try doZValueStringTest("2", arr.items[1]);
-                    try doZValueStringTest("3", arr.items[2]);
-                },
-                else => return error.UnexpectedValue,
-            }
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Object);
+    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    try testing.expect(a == .Array);
+    try testing.expectEqual(@as(usize, 3), a.Array.items.len);
+    try doZValueStringTest("1", a.Array.items[0]);
+    try doZValueStringTest("2", a.Array.items[1]);
+    try doZValueStringTest("3", a.Array.items[2]);
 }
 
 test "object in an array" {
-    const input = "key = [ { a = b c = d } ]";
+    const input = "hi = [ { a = b c = d } ]";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Array => |arr| {
-            try testing.expectEqual(@as(usize, 1), arr.items.len);
-            switch (arr.items[0]) {
-                .Object => |obj| {
-                    const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
-                    try doZValueStringTest("b", entry_a.value_ptr.*);
-                    const entry_c = obj.getEntry("c") orelse return error.KeyNotFound;
-                    try doZValueStringTest("d", entry_c.value_ptr.*);
-                },
-                else => return error.UnexpectedValue,
-            }
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Array);
+    try testing.expectEqual(@as(usize, 1), hi.Array.items.len);
+    const item = hi.Array.items[0];
+    try testing.expect(item == .Object);
+    const a = item.Object.get("a") orelse return error.KeyNotFound;
+    try doZValueStringTest("b", a);
+    const c = item.Object.get("c") orelse return error.KeyNotFound;
+    try doZValueStringTest("d", c);
 }
 
 test "empty array in object" {
-    const input = "key = { a = [] }";
+    const input = "hi = { a = [] }";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Object => |obj| {
-            const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
-            switch (entry_a.value_ptr.*) {
-                .Array => |arr| try testing.expectEqual(@as(usize, 0), arr.items.len),
-                else => return error.UnexpectedValue,
-            }
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Object);
+    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    try testing.expect(a == .Array);
+    try testing.expectEqual(@as(usize, 0), a.Array.items.len);
 }
 
 test "empty object in array" {
-    const input = "key = [{}]";
+    const input = "hi = [{}]";
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Array => |arr| {
-            try testing.expectEqual(@as(usize, 1), arr.items.len);
-            switch (arr.items[0]) {
-                .Object => |obj| {
-                    try testing.expectEqual(@as(usize, 0), obj.count());
-                },
-                else => return error.UnexpectedValue,
-            }
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Array);
+    try testing.expectEqual(@as(usize, 1), hi.Array.items.len);
+    try testing.expect(hi.Array.items[0] == .Object);
+    try testing.expectEqual(@as(usize, 0), hi.Array.items[0].Object.count());
 }
 
 // TODO: empty Zomb.map
@@ -814,8 +751,8 @@ test "macro - bare string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("hi") orelse return error.KeyNotFound;
-    try doZValueStringTest("hello", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("hello", hi);
 }
 
 test "macro - object value" {
@@ -828,14 +765,10 @@ test "macro - object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("hi") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Object => |obj| {
-            const entry_a = obj.getEntry("a") orelse return error.KeyNotFound;
-            try doZValueStringTest("hello", entry_a.value_ptr.*);
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Object);
+    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    try doZValueStringTest("hello", a);
 }
 
 test "macro - array value" {
@@ -846,16 +779,12 @@ test "macro - array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("hi") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Array => |arr| {
-            try testing.expectEqual(@as(usize, 3), arr.items.len);
-            try doZValueStringTest("a", arr.items[0]);
-            try doZValueStringTest("b", arr.items[1]);
-            try doZValueStringTest("c", arr.items[2]);
-        },
-        else => return error.UnexpectedValue,
-    }
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try testing.expect(hi == .Array);
+    try testing.expectEqual(@as(usize, 3), hi.Array.items.len);
+    try doZValueStringTest("a", hi.Array.items[0]);
+    try doZValueStringTest("b", hi.Array.items[1]);
+    try doZValueStringTest("c", hi.Array.items[2]);
 }
 
 test "macro - one level object accessor" {
@@ -868,8 +797,8 @@ test "macro - one level object accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("hi") orelse return error.KeyNotFound;
-    try doZValueStringTest("hello", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("hello", hi);
 }
 
 test "macro - one level array accessor" {
@@ -880,8 +809,8 @@ test "macro - one level array accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("hi") orelse return error.KeyNotFound;
-    try doZValueStringTest("goodbye", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("goodbye", hi);
 }
 
 test "macro - object in object accessor" {
@@ -894,8 +823,8 @@ test "macro - object in object accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("hi") orelse return error.KeyNotFound;
-    try doZValueStringTest("hello", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("hello", hi);
 }
 
 test "macro - array in array accessor" {
@@ -906,8 +835,8 @@ test "macro - array in array accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("hi") orelse return error.KeyNotFound;
-    try doZValueStringTest("b", entry.value_ptr.*);
+    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    try doZValueStringTest("b", hi);
 }
 
 test "macro - macro expression in macro declaration" {
@@ -920,45 +849,67 @@ test "macro - macro expression in macro declaration" {
         \\    scope = %scope
         \\    color = $color(%alpha, $color(X, X).red).black
         \\}
-        \\key = $colorize("hello world", 0F)
+        \\colorized = $colorize("hello world", 0F)
     ;
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const entry = z.map.getEntry("key") orelse return error.KeyNotFound;
-    switch (entry.value_ptr.*) {
-        .Object => |obj| {
-            const scope_entry = obj.getEntry("scope") orelse return error.KeyNotFound;
-            try doZValueStringTest("hello world", scope_entry.value_ptr.*);
-
-            const color_entry = obj.getEntry("color") orelse return error.KeyNotFound;
-            try doZValueStringTest("#0000000F", color_entry.value_ptr.*);
-        },
-        else => return error.UnexpectedValue,
-    }
+    const colorized = z.map.get("colorized") orelse return error.KeyNotFound;
+    try testing.expect(colorized == .Object);
+    const scope = colorized.Object.get("scope") orelse return error.KeyNotFound;
+    try doZValueStringTest("hello world", scope);
+    const color = colorized.Object.get("color") orelse return error.KeyNotFound;
+    try doZValueStringTest("#0000000F", color);
 }
 
-// test "macro batching" {
-//     const input =
-//         \\$color = {
-//         \\    black = #000000
-//         \\    red = #ff0000
-//         \\}
-//         \\$colorize(scope, color, alpha) = {
-//         \\    scope = %scope
-//         \\    settings = { foreground = %color + %alpha }
-//         \\}
-//         \\
-//         \\tokenColors =
-//         \\    $colorize(?, $color.black, ?) % [
-//         \\        [ "editor.background" 55 ]
-//         \\        [ "editor.border"     66 ]
-//         \\    ] +
-//         \\    $colorize(?, $color.red, ?) % [
-//         \\        [ "editor.foreground"      7f ]
-//         \\        [ "editor.highlightBorder" ff ]
-//         \\    ]
-//     ;
-//     const z = try parseTestInput(input);
-//     defer z.deinit();
-// }
+test "macro batching with default parameter" {
+    const input =
+        \\$color = {
+        \\    black = #000000
+        \\    red = #ff0000
+        \\}
+        \\$colorize(scope, color, alpha = ff) = {
+        \\    scope = %scope
+        \\    settings = { foreground = %color + %alpha }
+        \\}
+        \\
+        \\tokenColors =
+        \\    $colorize(?, $color.black, ?) % [
+        \\        [ "editor.background" 55 ]
+        \\        [ "editor.border"     66 ]
+        \\    ] +
+        \\    $colorize(?, $color.red) % [
+        \\        [ "editor.foreground" ]
+        \\        [ "editor.highlightBorder" ]
+        \\    ]
+    ;
+    const z = try parseTestInput(input);
+    defer z.deinit();
+
+    const token_colors = z.map.get("tokenColors") orelse return error.KeyNotFound;
+    try testing.expect(token_colors == .Array);
+    try testing.expectEqual(@as(usize, 4), token_colors.Array.items.len);
+    for (token_colors.Array.items) |colorized, i| {
+        try testing.expect(colorized == .Object);
+        const scope = colorized.Object.get("scope") orelse return error.KeyNotFound;
+        var expected = switch (i) {
+            0 => "editor.background",
+            1 => "editor.border",
+            2 => "editor.foreground",
+            3 => "editor.highlightBorder",
+            else => return error.InvalidIndex,
+        };
+        try doZValueStringTest(expected, scope);
+        const settings = colorized.Object.get("settings") orelse return error.KeyNotFound;
+        try testing.expect(settings == .Object);
+        const foreground = settings.Object.get("foreground") orelse return error.KeyNotFound;
+        expected = switch (i) {
+            0 => "#00000055",
+            1 => "#00000066",
+            2 => "#ff0000ff",
+            3 => "#ff0000ff",
+            else => return error.InvalidIndex,
+        };
+        try doZValueStringTest(expected, foreground);
+    }
+}

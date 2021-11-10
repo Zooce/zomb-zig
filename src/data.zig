@@ -114,7 +114,24 @@ pub const ZExpr = struct {
         }
 
         try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.writeAll("batch_args_set = TODO\n");
+        try writer.writeAll("batch_args_set = ");
+        if (self.batch_args_list) |batch_args_list| {
+            try writer.writeAll("[\n");
+            for (batch_args_list.items) |batch_args| {
+                try writer.writeByteNTimes(' ', (indent + 2) * 2);
+                try writer.writeAll("[\n");
+                for (batch_args.items) |c_list| {
+                    try writer.writeByteNTimes(' ', (indent + 3) * 2);
+                    try logConcatList(c_list, writer, indent + 3);
+                }
+                try writer.writeByteNTimes(' ', (indent + 2) * 2);
+                try writer.writeAll("]\n");
+            }
+            try writer.writeByteNTimes(' ', (indent + 1) * 2);
+            try writer.writeAll("]\n");
+        } else {
+            try writer.writeAll("null\n");
+        }
 
         try writer.writeByteNTimes(' ', indent * 2);
         try writer.writeAll("}\n");
@@ -447,7 +464,7 @@ pub fn reduce
         const held = std.debug.getStderrMutex().acquire();
         defer held.release();
         const stderr = std.io.getStdErr().writer();
-        try stderr.print("\nReducing ConcatList:\n{struct}\n", .{ctx_});
+        try stderr.print("\n---[Reducing ConcatList]---\n{struct}\n", .{ctx_});
         {
             try logConcatList(concat_list_, stderr, 0);
         }
@@ -544,6 +561,13 @@ pub fn reduce
                 }
             },
         }
+    }
+
+    if (util.DEBUG) {
+        const held = std.debug.getStderrMutex().acquire();
+        defer held.release();
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print("\n---[Result]---\n{struct}\n", .{result_.*});
     }
     return true;
 }
