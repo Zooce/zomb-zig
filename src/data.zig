@@ -139,7 +139,7 @@ pub const ZExpr = struct {
 
     pub fn setArgs
         ( self: *Self
-        , allocator_: *std.mem.Allocator
+        , allocator_: std.mem.Allocator
         , args_: std.ArrayList(ZExprArg)
         , macros_: std.StringArrayHashMap(ZMacro)
         )
@@ -156,7 +156,7 @@ pub const ZExpr = struct {
 
     pub fn evaluate
         ( self: Self
-        , allocator_: *std.mem.Allocator
+        , allocator_: std.mem.Allocator
         , result_: *ZValue
         , init_result_: bool
         , ext_accessors_: ?[][]const u8
@@ -217,7 +217,7 @@ pub const ZExpr = struct {
 
     fn exprAccessors
         ( self: Self
-        , allocator_: *std.mem.Allocator
+        , allocator_: std.mem.Allocator
         , ext_accessors_: ?[][]const u8
         )
         anyerror!?std.ArrayList([]const u8)
@@ -241,7 +241,7 @@ pub const ZExpr = struct {
 
     fn exprArgs
         ( self: Self
-        , allocator_: *std.mem.Allocator
+        , allocator_: std.mem.Allocator
         , ctx_args_: ?std.StringArrayHashMap(ConcatList)
         , batch_args_: ?std.ArrayList(ConcatList)
         , macro_: ZMacro
@@ -451,7 +451,7 @@ pub const ReductionContext = struct {
     }
 };
 pub fn reduce
-    ( allocator_: *std.mem.Allocator
+    ( allocator_: std.mem.Allocator
     , concat_list_: ConcatList
     , result_: *ZValue
     , init_result_: bool
@@ -664,30 +664,30 @@ test "concat list of objects reduction - no macros" {
     defer arena.deinit();
 
     // object 0
-    var obj_0 = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
-    var c_list_0 = ConcatList.init(&arena.allocator);
+    var obj_0 = .{ .Object = std.StringArrayHashMap(ConcatList).init(arena.allocator()) };
+    var c_list_0 = ConcatList.init(arena.allocator());
     try c_list_0.append(.{ .String = "b" });
     try obj_0.Object.putNoClobber("a", c_list_0);
 
     // object 1
-    var obj_1 = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
-    var c_list_1 = ConcatList.init(&arena.allocator);
+    var obj_1 = .{ .Object = std.StringArrayHashMap(ConcatList).init(arena.allocator()) };
+    var c_list_1 = ConcatList.init(arena.allocator());
     try c_list_1.append(.{ .String = "d" });
     try obj_1.Object.putNoClobber("c", c_list_1);
 
     // fill in the concat list
     // { a = b } + { c = d }
-    var c_list = ConcatList.init(&arena.allocator);
+    var c_list = ConcatList.init(arena.allocator());
     try c_list.append(obj_0);
     try c_list.append(obj_1);
 
     // we need a macro map to call reduce() - we know it won't be used in this test, so just make an empty one
-    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
+    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(arena.allocator()) };
 
     // get the result
     // { a = b, c = d }
     var result: ZValue = undefined;
-    const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
+    const did_reduce = try reduce(arena.allocator(), c_list, &result, true, null, ctx);
     try std.testing.expect(did_reduce);
 
     // test the result
@@ -703,30 +703,30 @@ test "concat list of arrays reduction - no macros" {
     defer arena.deinit();
 
     // array 0
-    var arr_0 = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
-    var c_list_0 = ConcatList.init(&arena.allocator);
+    var arr_0 = .{ .Array = std.ArrayList(ConcatList).init(arena.allocator()) };
+    var c_list_0 = ConcatList.init(arena.allocator());
     try c_list_0.append(.{ .String = "a" });
     try arr_0.Array.append(c_list_0);
 
     // array 1
-    var arr_1 = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
-    var c_list_1 = ConcatList.init(&arena.allocator);
+    var arr_1 = .{ .Array = std.ArrayList(ConcatList).init(arena.allocator()) };
+    var c_list_1 = ConcatList.init(arena.allocator());
     try c_list_1.append(.{ .String = "b" });
     try arr_1.Array.append(c_list_1);
 
     // fill in the concat list
     // [ a ] + [ b ]
-    var c_list = ConcatList.init(&arena.allocator);
+    var c_list = ConcatList.init(arena.allocator());
     try c_list.append(arr_0);
     try c_list.append(arr_1);
 
     // we need a macro map to call reduce() - we know it won't be used in this test, so just make an empty one
-    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
+    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(arena.allocator()) };
 
     // get the result
     // [ a, b ]
     var result: ZValue = undefined;
-    const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
+    const did_reduce = try reduce(arena.allocator(), c_list, &result, true, null, ctx);
     try std.testing.expect(did_reduce);
 
     // test the result
@@ -741,16 +741,16 @@ test "concat list of strings reduction - no macros" {
 
     // fill in the concat list
     // "a" + "b"
-    var c_list = ConcatList.init(&arena.allocator);
+    var c_list = ConcatList.init(arena.allocator());
     try c_list.append(.{ .String = "a" });
     try c_list.append(.{ .String = "b" });
 
-    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator) };
+    const ctx = .{ .macros = std.StringArrayHashMap(ZMacro).init(arena.allocator()) };
 
     // get the result
     // "ab"
     var result: ZValue = undefined;
-    const did_reduce = try reduce(&arena.allocator, c_list, &result, true, null, ctx);
+    const did_reduce = try reduce(arena.allocator(), c_list, &result, true, null, ctx);
     try std.testing.expect(did_reduce);
 
     // test the result
@@ -764,27 +764,27 @@ test "macro expression evaluation - no accessors no batching" {
 
     // macro
     // $greet(name) = "Hello, " + %name + "!"
-    var value = ConcatList.init(&arena.allocator);
+    var value = ConcatList.init(arena.allocator());
     try value.append(.{ .String = "Hello, " });
     try value.append(.{ .Parameter = "name" });
     try value.append(.{ .String = "!" });
-    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var parameters = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try parameters.putNoClobber("name", null);
     const macro = ZMacro{ .parameters = parameters, .value = value };
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
     try macros.putNoClobber("greet", macro);
 
     // expression
-    var c_list = ConcatList.init(&arena.allocator);
+    var c_list = ConcatList.init(arena.allocator());
     try c_list.append(.{ .String = "Zooce" });
-    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args.putNoClobber("name", .{ .CList = c_list });
     const expr = ZExpr{ .key = "greet", .args = args };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -802,37 +802,37 @@ test "macro expression object single accessor evaluation - no batching" {
     //     black = #000000 + %alpha
     //     red = #ff0000 + %alpha
     // }
-    var black_val = ConcatList.init(&arena.allocator);
+    var black_val = ConcatList.init(arena.allocator());
     try black_val.append(.{ .String = "#000000" });
     try black_val.append(.{ .Parameter = "alpha" });
-    var red_val = ConcatList.init(&arena.allocator);
+    var red_val = ConcatList.init(arena.allocator());
     try red_val.append(.{ .String = "#ff0000" });
     try red_val.append(.{ .Parameter = "alpha" });
-    var color_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    var color_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(arena.allocator()) };
     try color_obj.Object.putNoClobber("black", black_val);
     try color_obj.Object.putNoClobber("red", red_val);
-    var color_val = ConcatList.init(&arena.allocator);
+    var color_val = ConcatList.init(arena.allocator());
     try color_val.append(color_obj);
 
-    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var parameters = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try parameters.putNoClobber("alpha", null);
     const macro = ZMacro{ .parameters = parameters, .value = color_val };
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
     try macros.putNoClobber("color", macro);
 
     // expression
-    var alpha = ConcatList.init(&arena.allocator);
+    var alpha = ConcatList.init(arena.allocator());
     try alpha.append(.{ .String = "ff" });
-    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args.putNoClobber("alpha", .{ .CList = alpha });
-    var accessors = std.ArrayList([]const u8).init(&arena.allocator);
+    var accessors = std.ArrayList([]const u8).init(arena.allocator());
     try accessors.append("black");
     const expr = ZExpr{ .key = "color", .args = args, .accessors = accessors };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -850,37 +850,37 @@ test "macro expression array single accessor evaluation - no batching" {
     //     %name + " - dog walker"
     //     %name + " - engineer"
     // ]
-    var dog_walker_val = ConcatList.init(&arena.allocator);
+    var dog_walker_val = ConcatList.init(arena.allocator());
     try dog_walker_val.append(.{ .Parameter = "name" });
     try dog_walker_val.append(.{ .String = " - dog walker" });
-    var engineer_val = ConcatList.init(&arena.allocator);
+    var engineer_val = ConcatList.init(arena.allocator());
     try engineer_val.append(.{ .Parameter = "name" });
     try engineer_val.append(.{ .String = " - engineer" });
-    var jobs_obj = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
+    var jobs_obj = .{ .Array = std.ArrayList(ConcatList).init(arena.allocator()) };
     try jobs_obj.Array.append(dog_walker_val);
     try jobs_obj.Array.append(engineer_val);
-    var jobs_val = ConcatList.init(&arena.allocator);
+    var jobs_val = ConcatList.init(arena.allocator());
     try jobs_val.append(jobs_obj);
 
-    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var parameters = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try parameters.putNoClobber("name", null);
     const macro = ZMacro{ .parameters = parameters, .value = jobs_val };
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
     try macros.putNoClobber("jobs", macro);
 
     // expression
-    var name = ConcatList.init(&arena.allocator);
+    var name = ConcatList.init(arena.allocator());
     try name.append(.{ .String = "Zooce" });
-    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args.putNoClobber("name", .{ .CList = name });
-    var accessors = std.ArrayList([]const u8).init(&arena.allocator);
+    var accessors = std.ArrayList([]const u8).init(arena.allocator());
     try accessors.append("1");
     const expr = ZExpr{ .key = "jobs", .args = args, .accessors = accessors };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -898,46 +898,46 @@ test "macro expression multiple accessor evaluation - no batching" {
     //     k1 = [ a b %p1 ]
     //     k2 = "hello dude"
     // }
-    var a = ConcatList.init(&arena.allocator);
+    var a = ConcatList.init(arena.allocator());
     try a.append(.{ .String = "a" });
-    var b = ConcatList.init(&arena.allocator);
+    var b = ConcatList.init(arena.allocator());
     try b.append(.{ .String = "b" });
-    var p = ConcatList.init(&arena.allocator);
+    var p = ConcatList.init(arena.allocator());
     try p.append(.{ .Parameter = "p1" });
-    var k1_arr = .{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
+    var k1_arr = .{ .Array = std.ArrayList(ConcatList).init(arena.allocator()) };
     try k1_arr.Array.append(a);
     try k1_arr.Array.append(b);
     try k1_arr.Array.append(p);
-    var k1_val = ConcatList.init(&arena.allocator);
+    var k1_val = ConcatList.init(arena.allocator());
     try k1_val.append(k1_arr);
-    var k2_val = ConcatList.init(&arena.allocator);
+    var k2_val = ConcatList.init(arena.allocator());
     try k2_val.append(.{ .String = "hello dude" });
-    var macro_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    var macro_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(arena.allocator()) };
     try macro_obj.Object.putNoClobber("k1", k1_val);
     try macro_obj.Object.putNoClobber("k2", k2_val);
-    var macro_val = ConcatList.init(&arena.allocator);
+    var macro_val = ConcatList.init(arena.allocator());
     try macro_val.append(macro_obj);
 
-    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var parameters = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try parameters.putNoClobber("p1", null);
     const macro = ZMacro{ .parameters = parameters, .value = macro_val };
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
     try macros.putNoClobber("macro", macro);
 
     // expression
-    var p1 = ConcatList.init(&arena.allocator);
+    var p1 = ConcatList.init(arena.allocator());
     try p1.append(.{ .String = "Zooce" });
-    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args.putNoClobber("p1", .{ .CList = p1 });
-    var accessors = std.ArrayList([]const u8).init(&arena.allocator);
+    var accessors = std.ArrayList([]const u8).init(arena.allocator());
     try accessors.append("k1");
     try accessors.append("1");
     const expr = ZExpr{ .key = "macro", .args = args, .accessors = accessors };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -952,31 +952,31 @@ test "macro expression with default value evaluation - no accessors no batching"
 
     // macro
     // $greet(name, ack = "Hello") = %ack + ", " + %name + "!"
-    var value = ConcatList.init(&arena.allocator);
+    var value = ConcatList.init(arena.allocator());
     try value.append(.{ .Parameter = "ack" });
     try value.append(.{ .String = ", " });
     try value.append(.{ .Parameter = "name" });
     try value.append(.{ .String = "!" });
-    var ack = ConcatList.init(&arena.allocator);
+    var ack = ConcatList.init(arena.allocator());
     try ack.append(.{ .String = "Hello" });
-    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var parameters = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try parameters.putNoClobber("name", null);
     try parameters.putNoClobber("ack", ack);
     const macro = ZMacro{ .parameters = parameters, .value = value };
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
     try macros.putNoClobber("greet", macro);
 
     // expression
-    var name_arg = ConcatList.init(&arena.allocator);
+    var name_arg = ConcatList.init(arena.allocator());
     try name_arg.append(.{ .String = "Zooce" });
-    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args.putNoClobber("name", .{ .CList = name_arg });
     const expr = ZExpr{ .key = "greet", .args = args };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -991,17 +991,17 @@ test "batched macro expression evaluation - no accessors" {
 
     // macro
     // $color(alpha, beta) = #ff0000 + %alpha + %beta
-    var value = ConcatList.init(&arena.allocator);
+    var value = ConcatList.init(arena.allocator());
     try value.append(.{ .String = "#ff0000" });
     try value.append(.{ .Parameter = "alpha" });
     try value.append(.{ .Parameter = "beta" });
 
-    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var parameters = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try parameters.putNoClobber("alpha", null);
     try parameters.putNoClobber("beta", null);
     const macro = ZMacro{ .parameters = parameters, .value = value };
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
     try macros.putNoClobber("color", macro);
 
     // expression
@@ -1009,27 +1009,27 @@ test "batched macro expression evaluation - no accessors" {
     //     [ 07 ]
     //     [ ff ]
     // ]
-    var alpha1 = ConcatList.init(&arena.allocator);
+    var alpha1 = ConcatList.init(arena.allocator());
     try alpha1.append(.{ .String = "07" });
-    var alpha1_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    var alpha1_batch = std.ArrayList(ConcatList).init(arena.allocator());
     try alpha1_batch.append(alpha1);
-    var alpha2 = ConcatList.init(&arena.allocator);
+    var alpha2 = ConcatList.init(arena.allocator());
     try alpha2.append(.{ .String = "ff" });
-    var alpha2_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    var alpha2_batch = std.ArrayList(ConcatList).init(arena.allocator());
     try alpha2_batch.append(alpha2);
-    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(&arena.allocator);
+    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(arena.allocator());
     try batch_args_list.append(alpha1_batch);
     try batch_args_list.append(alpha2_batch);
-    var beta = ConcatList.init(&arena.allocator);
+    var beta = ConcatList.init(arena.allocator());
     try beta.append(.{ .String = "ff" });
-    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args.putNoClobber("alpha", .BatchPlaceholder);
     try args.putNoClobber("beta", .{ .CList = beta });
     const expr = ZExpr{ .key = "color", .args = args, .batch_args_list = batch_args_list };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -1049,26 +1049,26 @@ test "batched macro expression evaluation" {
     //     black = #000000 + %alpha + %beta
     //     red = #ff0000 + %alpha + %beta
     // }
-    var black_val = ConcatList.init(&arena.allocator);
+    var black_val = ConcatList.init(arena.allocator());
     try black_val.append(.{ .String = "#000000" });
     try black_val.append(.{ .Parameter = "alpha" });
     try black_val.append(.{ .Parameter = "beta" });
-    var red_val = ConcatList.init(&arena.allocator);
+    var red_val = ConcatList.init(arena.allocator());
     try red_val.append(.{ .String = "#ff0000" });
     try red_val.append(.{ .Parameter = "alpha" });
     try red_val.append(.{ .Parameter = "beta" });
-    var color_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    var color_obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(arena.allocator()) };
     try color_obj.Object.putNoClobber("black", black_val);
     try color_obj.Object.putNoClobber("red", red_val);
-    var color_val = ConcatList.init(&arena.allocator);
+    var color_val = ConcatList.init(arena.allocator());
     try color_val.append(color_obj);
 
-    var parameters = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var parameters = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try parameters.putNoClobber("alpha", null);
     try parameters.putNoClobber("beta", null);
     const macro = ZMacro{ .parameters = parameters, .value = color_val };
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
     try macros.putNoClobber("color", macro);
 
     // expression
@@ -1076,29 +1076,29 @@ test "batched macro expression evaluation" {
     //     [ 07 ]
     //     [ ff ]
     // ]
-    var alpha1 = ConcatList.init(&arena.allocator);
+    var alpha1 = ConcatList.init(arena.allocator());
     try alpha1.append(.{ .String = "07" });
-    var alpha1_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    var alpha1_batch = std.ArrayList(ConcatList).init(arena.allocator());
     try alpha1_batch.append(alpha1);
-    var alpha2 = ConcatList.init(&arena.allocator);
+    var alpha2 = ConcatList.init(arena.allocator());
     try alpha2.append(.{ .String = "ff" });
-    var alpha2_batch = std.ArrayList(ConcatList).init(&arena.allocator);
+    var alpha2_batch = std.ArrayList(ConcatList).init(arena.allocator());
     try alpha2_batch.append(alpha2);
-    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(&arena.allocator);
+    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(arena.allocator());
     try batch_args_list.append(alpha1_batch);
     try batch_args_list.append(alpha2_batch);
-    var beta = ConcatList.init(&arena.allocator);
+    var beta = ConcatList.init(arena.allocator());
     try beta.append(.{ .String = "ff" });
-    var args = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args.putNoClobber("alpha", .BatchPlaceholder);
     try args.putNoClobber("beta", .{ .CList = beta });
-    var accessors = std.ArrayList([]const u8).init(&arena.allocator);
+    var accessors = std.ArrayList([]const u8).init(arena.allocator());
     try accessors.append("black");
     const expr = ZExpr{ .key = "color", .args = args, .accessors = accessors, .batch_args_list = batch_args_list };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -1113,20 +1113,20 @@ test "crazy batched macro expression inside another macro expression" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var macros = std.StringArrayHashMap(ZMacro).init(&arena.allocator);
+    var macros = std.StringArrayHashMap(ZMacro).init(arena.allocator());
 
     // macro a
     // $macro_a(a, b, c, d = "AF") = %a + %b + %c + %d
-    var a_val = ConcatList.init(&arena.allocator);
+    var a_val = ConcatList.init(arena.allocator());
     try a_val.append(.{ .Parameter = "a" });
     try a_val.append(.{ .Parameter = "b" });
     try a_val.append(.{ .Parameter = "c" });
     try a_val.append(.{ .Parameter = "d" });
-    var a_params = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var a_params = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try a_params.putNoClobber("a", null);
     try a_params.putNoClobber("b", null);
     try a_params.putNoClobber("c", null);
-    var d_par_def = ConcatList.init(&arena.allocator);
+    var d_par_def = ConcatList.init(arena.allocator());
     try d_par_def.append(.{ .String = "AF" });
     try a_params.putNoClobber("d", d_par_def);
     const macro_a = ZMacro{ .parameters = a_params, .value = a_val };
@@ -1138,53 +1138,53 @@ test "crazy batched macro expression inside another macro expression" {
     //         [ 100 ] [ %param ] [ 10000 ]
     //     ]
     // }
-    var arg_1 = ConcatList.init(&arena.allocator);
+    var arg_1 = ConcatList.init(arena.allocator());
     try arg_1.append(.{ .Parameter = "param" });
-    var arg_3 = ConcatList.init(&arena.allocator);
+    var arg_3 = ConcatList.init(arena.allocator());
     try arg_3.append(.{ .String = "Hello, World!" });
-    var args_a = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args_a = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args_a.putNoClobber("a", .{ .CList = arg_1 });
     try args_a.putNoClobber("b", .BatchPlaceholder);
     try args_a.putNoClobber("c", .{ .CList = arg_3 });
-    var batch_1 = ConcatList.init(&arena.allocator);
+    var batch_1 = ConcatList.init(arena.allocator());
     try batch_1.append(.{ .String = "100" });
-    var batch_set_1 = std.ArrayList(ConcatList).init(&arena.allocator);
+    var batch_set_1 = std.ArrayList(ConcatList).init(arena.allocator());
     try batch_set_1.append(batch_1);
-    var batch_2 = ConcatList.init(&arena.allocator);
+    var batch_2 = ConcatList.init(arena.allocator());
     try batch_2.append(.{ .Parameter = "param" });
-    var batch_set_2 = std.ArrayList(ConcatList).init(&arena.allocator);
+    var batch_set_2 = std.ArrayList(ConcatList).init(arena.allocator());
     try batch_set_2.append(batch_2);
-    var batch_3 = ConcatList.init(&arena.allocator);
+    var batch_3 = ConcatList.init(arena.allocator());
     try batch_3.append(.{ .String = "10000" });
-    var batch_set_3 = std.ArrayList(ConcatList).init(&arena.allocator);
+    var batch_set_3 = std.ArrayList(ConcatList).init(arena.allocator());
     try batch_set_3.append(batch_3);
-    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(&arena.allocator);
+    var batch_args_list = std.ArrayList(std.ArrayList(ConcatList)).init(arena.allocator());
     try batch_args_list.append(batch_set_1);
     try batch_args_list.append(batch_set_2);
     try batch_args_list.append(batch_set_3);
     const key_expr = ZExpr{ .key = "macro_a", .args = args_a, .batch_args_list = batch_args_list };
-    var key_val = ConcatList.init(&arena.allocator);
+    var key_val = ConcatList.init(arena.allocator());
     try key_val.append(.{ .Expression = key_expr });
-    var obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    var obj = .{ .Object = std.StringArrayHashMap(ConcatList).init(arena.allocator()) };
     try obj.Object.putNoClobber("key", key_val );
-    var b_val = ConcatList.init(&arena.allocator);
+    var b_val = ConcatList.init(arena.allocator());
     try b_val.append(obj);
-    var b_params = std.StringArrayHashMap(?ConcatList).init(&arena.allocator);
+    var b_params = std.StringArrayHashMap(?ConcatList).init(arena.allocator());
     try b_params.putNoClobber("param", null);
     const macro_b = ZMacro{ .parameters = b_params, .value = b_val };
     try macros.putNoClobber("macro_b", macro_b);
 
     // expression
     // $macro_b("Zooce")
-    var param = ConcatList.init(&arena.allocator);
+    var param = ConcatList.init(arena.allocator());
     try param.append(.{ .String = "Zooce" });
-    var args_b = std.StringArrayHashMap(ZExprArg).init(&arena.allocator);
+    var args_b = std.StringArrayHashMap(ZExprArg).init(arena.allocator());
     try args_b.putNoClobber("param", .{ .CList = param });
     const expr = ZExpr{ .key = "macro_b", .args = args_b };
 
     // evaluate the expression
     var result: ZValue = undefined;
-    const did_evaluate = try expr.evaluate(&arena.allocator, &result, true, null, .{ .macros = macros });
+    const did_evaluate = try expr.evaluate(arena.allocator(), &result, true, null, .{ .macros = macros });
     try std.testing.expect(did_evaluate);
 
     // test the result
@@ -1205,14 +1205,14 @@ test "debug printing" {
 
     const item_1 = ConcatItem{ .String = "item 1" };
     const item_2 = ConcatItem{ .String = "item 2" };
-    var item_list = ConcatList.init(&arena.allocator);
+    var item_list = ConcatList.init(arena.allocator());
     try item_list.append(item_1);
     try item_list.append(item_2);
-    var c_arr = ConcatItem{ .Array = std.ArrayList(ConcatList).init(&arena.allocator) };
+    var c_arr = ConcatItem{ .Array = std.ArrayList(ConcatList).init(arena.allocator()) };
     try c_arr.Array.append(item_list);
-    var arr_list = ConcatList.init(&arena.allocator);
+    var arr_list = ConcatList.init(arena.allocator());
     try arr_list.append(c_arr);
-    var c_obj = ConcatItem{ .Object = std.StringArrayHashMap(ConcatList).init(&arena.allocator) };
+    var c_obj = ConcatItem{ .Object = std.StringArrayHashMap(ConcatList).init(arena.allocator()) };
     try c_obj.Object.putNoClobber("key", arr_list);
 
     std.debug.print("\n{union}\n", .{c_obj});

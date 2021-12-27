@@ -61,7 +61,7 @@ pub const Parser = struct {
     macros: std.StringArrayHashMap(ZMacro) = undefined,
     token: ?Token = null,
 
-    pub fn init(input_: []const u8, alloc_: *std.mem.Allocator) Self {
+    pub fn init(input_: []const u8, alloc_: std.mem.Allocator) Self {
         return Self{
             .arena = std.heap.ArenaAllocator.init(alloc_),
             .input = input_,
@@ -73,7 +73,7 @@ pub const Parser = struct {
         self.arena.deinit();
     }
 
-    fn consumeAtTopLevel(self: *Self, allocator_: *std.mem.Allocator) !void {
+    fn consumeAtTopLevel(self: *Self, allocator_: std.mem.Allocator) !void {
         if (self.macro_validator) |*macro_validator| {
             // std.debug.print("...consuming macro declaration...\n", .{});
             defer macro_validator.deinit();
@@ -95,17 +95,17 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parse(self: *Self, allocator_: *std.mem.Allocator) !Zomb {
+    pub fn parse(self: *Self, allocator_: std.mem.Allocator) !Zomb {
         // initialize some temporary memory we need for parsing
-        self.stack = std.ArrayList(StackElem).init(&self.arena.allocator);
-        self.macros = std.StringArrayHashMap(ZMacro).init(&self.arena.allocator);
+        self.stack = std.ArrayList(StackElem).init(self.arena.allocator());
+        self.macros = std.StringArrayHashMap(ZMacro).init(self.arena.allocator());
 
         // this arena will be given to the caller so they can clean up the memory we allocate for the ZOMB types
         var out_arena = std.heap.ArenaAllocator.init(allocator_);
         errdefer out_arena.deinit();
 
         // add the implicit top-level object to our type stack
-        try self.stack.append(.{ .TopLevelObject = std.StringArrayHashMap(ZValue).init(&out_arena.allocator) });
+        try self.stack.append(.{ .TopLevelObject = std.StringArrayHashMap(ZValue).init(out_arena.allocator()) });
 
         errdefer {
             if (self.token) |token| {
@@ -121,7 +121,7 @@ pub const Parser = struct {
             try self.step();
             if (self.state_machine.state == .Decl) {
                 try self.log(count, "Pre-Decl Consume");
-                try self.consumeAtTopLevel(&out_arena.allocator);
+                try self.consumeAtTopLevel(out_arena.allocator());
             }
             done = self.token == null and self.stack.items.len == 1;
         }
@@ -183,7 +183,7 @@ pub const Parser = struct {
                 switch (top) {
                     .ExprArgList => |expr_arg_list| {
                         defer expr_arg_list.deinit();
-                        try expr.*.setArgs(&self.arena.allocator, expr_arg_list, self.macros);
+                        try expr.*.setArgs(self.arena.allocator(), expr_arg_list, self.macros);
                     },
                     .BSet => |batch_set| {
                         expr.*.batch_args_list = batch_set;
@@ -235,7 +235,7 @@ pub const Parser = struct {
             .ValueEnter => {
                 // don't add the CList for an empty array or a batch placeholder
                 if (self.token.?.token_type != .CloseSquare and self.token.?.token_type != .Question) {
-                    try self.stack.append(.{ .CList = ConcatList.init(&self.arena.allocator) });
+                    try self.stack.append(.{ .CList = ConcatList.init(self.arena.allocator()) });
                 }
                 keep_token = true;
             },
@@ -268,7 +268,7 @@ pub const Parser = struct {
 
             // Objects
             .ObjectBegin => {
-                try self.stack.append(.{ .CItem = .{ .Object = std.StringArrayHashMap(ConcatList).init(&self.arena.allocator) } });
+                try self.stack.append(.{ .CItem = .{ .Object = std.StringArrayHashMap(ConcatList).init(self.arena.allocator()) } });
             },
             .Key => switch (self.token.?.token_type) {
                 .String => try self.stack.append(.{ .Key = token_slice }),
@@ -281,7 +281,7 @@ pub const Parser = struct {
 
             // Arrays
             .ArrayBegin => {
-                try self.stack.append(.{ .CItem = .{ .Array = std.ArrayList(ConcatList).init(&self.arena.allocator) } });
+                try self.stack.append(.{ .CItem = .{ .Array = std.ArrayList(ConcatList).init(self.arena.allocator()) } });
             },
             .ConsumeArrayItem => {
                 keep_token = true;
@@ -300,8 +300,8 @@ pub const Parser = struct {
             },
             .MacroDeclOptionalParams => switch (self.token.?.token_type) {
                 .OpenParen => {
-                    try self.stack.append(.{ .ParamMap = std.StringArrayHashMap(?ConcatList).init(&self.arena.allocator) });
-                    self.macro_validator.?.param_counts = std.StringArrayHashMap(usize).init(&self.arena.allocator);
+                    try self.stack.append(.{ .ParamMap = std.StringArrayHashMap(?ConcatList).init(self.arena.allocator()) });
+                    self.macro_validator.?.param_counts = std.StringArrayHashMap(usize).init(self.arena.allocator());
                 },
                 else => try self.stack.append(.{ .ParamMap = null }),
             },
@@ -341,7 +341,7 @@ pub const Parser = struct {
             .MacroExprOptionalArgsOrAccessors, .MacroExprOptionalAccessors => {
                 if (self.token.?.token_type == .MacroAccessor) {
                     var expr = &self.stack.items[self.stack.items.len - 1].CItem.Expression;
-                    expr.*.accessors = std.ArrayList([]const u8).init(&self.arena.allocator);
+                    expr.*.accessors = std.ArrayList([]const u8).init(self.arena.allocator());
                 }
                 keep_token = true;
             },
@@ -364,7 +364,7 @@ pub const Parser = struct {
 
             // Macro Expression Arguments
             .MacroExprArgsBegin => {
-                try self.stack.append(.{ .ExprArgList = std.ArrayList(ZExprArg).init(&self.arena.allocator) });
+                try self.stack.append(.{ .ExprArgList = std.ArrayList(ZExprArg).init(self.arena.allocator()) });
             },
             .ConsumeMacroExprArg => {
                 keep_token = true;
@@ -375,7 +375,7 @@ pub const Parser = struct {
 
             // Macro Expression Batch Arguments
             .MacroExprBatchListBegin => {
-                try self.stack.append(.{ .BSet = std.ArrayList(std.ArrayList(ConcatList)).init(&self.arena.allocator) });
+                try self.stack.append(.{ .BSet = std.ArrayList(std.ArrayList(ConcatList)).init(self.arena.allocator()) });
             },
             .MacroExprBatchArgsBegin => keep_token = true,
             .ConsumeMacroExprBatchArgs => {

@@ -12,13 +12,12 @@ const zomb = @import("zomb");
 
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = &gpa.allocator;
-    var input_file_contents = std.ArrayList(u8).init(alloc);
+    var input_file_contents = std.ArrayList(u8).init(gpa.allocator());
     defer input_file_contents.deinit();
 
     {
-        const args = try std.process.argsAlloc(alloc);
-        defer std.process.argsFree(alloc, args);
+        const args = try std.process.argsAlloc(gpa.allocator());
+        defer std.process.argsFree(gpa.allocator(), args);
 
         const path: []const u8 = if (args.len >= 2) args[1] else "example/test.zomb";
 
