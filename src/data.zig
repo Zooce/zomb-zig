@@ -1,7 +1,8 @@
 const std = @import("std");
 
-const util = @import("util.zig");
+const log = @import("log.zig");
 
+/// This is the type that ZOMB files deserialize into.
 pub const ZValue = union(enum) {
     Object: std.StringArrayHashMap(ZValue),
     Array: std.ArrayList(ZValue),
@@ -10,34 +11,7 @@ pub const ZValue = union(enum) {
     pub fn format(value: ZValue, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try value.log(writer, 0);
-    }
-
-    pub fn log(self: ZValue, writer: anytype, indent: usize) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        switch (self) {
-            .Object => |obj| {
-                try writer.writeAll("ZValue.Object = {\n");
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                    try writer.print("{s} = ", .{entry.key_ptr.*});
-                    try entry.value_ptr.*.log(writer, indent + 1);
-                }
-                try writer.writeByteNTimes(' ', indent * 2);
-                try writer.writeAll("}\n");
-            },
-            .Array => |arr| {
-                try writer.writeAll("ZValue.Array = [\n");
-                for (arr.items) |item| {
-                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                    try item.log(writer, indent + 1);
-                }
-                try writer.writeByteNTimes(' ', indent * 2);
-                try writer.writeAll("]\n");
-            },
-            .String => |str| try writer.print("ZValue.String = {s}\n", .{str.items}),
-        }
+        try log.logZValue(value, writer, 0);
     }
 
     // TODO: is this even necessary? maybe for the case where an arena allocator wasn't used?
@@ -73,68 +47,7 @@ pub const ZExpr = struct {
     pub fn format(value: ZExpr, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try value.log(writer, 0);
-    }
-
-    pub fn log(self: ZExpr, writer: anytype, indent: usize) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        try writer.writeAll("ZExpr = {\n");
-
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.print("key = {s}\n", .{self.key});
-
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.writeAll("args = ");
-        if (self.args) |args| {
-            try writer.writeAll("{\n");
-            var iter = args.iterator();
-            while (iter.next()) |entry| {
-                try writer.writeByteNTimes(' ', (indent + 2) * 2);
-                try writer.print("{s} = ", .{entry.key_ptr.*});
-                try entry.value_ptr.*.log(writer, indent + 2);
-            }
-            try writer.writeByteNTimes(' ', (indent + 1) * 2);
-            try writer.writeAll("}\n");
-        } else {
-            try writer.writeAll("null\n");
-        }
-
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.writeAll("accessors = ");
-        if (self.accessors) |accessors| {
-            try writer.writeAll("[\n");
-            for (accessors.items) |accessor| {
-                try writer.writeByteNTimes(' ', (indent + 2) * 2);
-                try writer.print("{s}\n", .{accessor});
-            }
-            try writer.writeByteNTimes(' ', (indent + 1) * 2);
-            try writer.writeAll("]\n");
-        } else {
-            try writer.writeAll("null\n");
-        }
-
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.writeAll("batch_args_set = ");
-        if (self.batch_args_list) |batch_args_list| {
-            try writer.writeAll("[\n");
-            for (batch_args_list.items) |batch_args| {
-                try writer.writeByteNTimes(' ', (indent + 2) * 2);
-                try writer.writeAll("[\n");
-                for (batch_args.items) |c_list| {
-                    try writer.writeByteNTimes(' ', (indent + 3) * 2);
-                    try logConcatList(c_list, writer, indent + 3);
-                }
-                try writer.writeByteNTimes(' ', (indent + 2) * 2);
-                try writer.writeAll("]\n");
-            }
-            try writer.writeByteNTimes(' ', (indent + 1) * 2);
-            try writer.writeAll("]\n");
-        } else {
-            try writer.writeAll("null\n");
-        }
-
-        try writer.writeByteNTimes(' ', indent * 2);
-        try writer.writeAll("}\n");
+        try log.logExpr(value, writer, 0);
     }
 
     pub fn setArgs
@@ -166,7 +79,7 @@ pub const ZExpr = struct {
     {
         // get the macro for this expression
         const macro = ctx_.macros.get(self.key) orelse return error.MacroKeyNotFound;
-        if (util.DEBUG) std.debug.print("evaluating macro -> {struct}", .{macro});
+        if (log.LOGGING) std.debug.print("evaluating macro -> {struct}", .{macro});
 
         // use the macro default args if necessary
         var expr_args: ?std.StringArrayHashMap(ConcatList) = null;
@@ -314,16 +227,7 @@ pub const ZExprArg = union(enum) {
     pub fn format(value: ZExprArg, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try value.log(writer, 0);
-    }
-
-    pub fn log(self: ZExprArg, writer: anytype, indent: usize) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        try writer.writeAll("ZExprArg.");
-        switch (self) {
-            .CList => |list| try logConcatList(list, writer, indent),
-            .BatchPlaceholder => try writer.writeAll("BatchPlaceholder\n"),
-        }
+        try log.logZExprArg(value, writer, 0);
     }
 };
 pub const ConcatItem = union(enum) {
@@ -336,49 +240,10 @@ pub const ConcatItem = union(enum) {
     pub fn format(value: ConcatItem, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try value.log(writer, 0);
-    }
-
-    pub fn log(self: ConcatItem, writer: anytype, indent: usize) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        switch (self) {
-            .Object => |obj| {
-                try writer.writeAll("ConcatItem.Object = {\n");
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                    try writer.print("{s} = ", .{entry.key_ptr.*});
-                    try logConcatList(entry.value_ptr.*, writer, indent + 1);
-                }
-                try writer.writeByteNTimes(' ', indent * 2);
-                try writer.writeAll("}\n");
-            },
-            .Array => |arr| {
-                try writer.writeAll("ConcatItem.Array = [\n");
-                for (arr.items) |item| {
-                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                    try logConcatList(item, writer, indent + 1);
-                }
-                try writer.writeByteNTimes(' ', indent * 2);
-                try writer.writeAll("]\n");
-            },
-            .String => |s| try writer.print("ConcatItem.String = {s}\n", .{s}),
-            .Parameter => |p| try writer.print("ConcatItem.Parameter = {s}\n", .{p}),
-            .Expression => |e| try e.log(writer, indent),
-        }
+        try log.logConcatItem(value, writer, 0);
     }
 };
 pub const ConcatList = std.ArrayList(ConcatItem);
-fn logConcatList(list: ConcatList, writer: anytype, indent: usize) std.os.WriteError!void {
-    if (!util.DEBUG) return;
-    try writer.writeAll("ConcatList = [\n");
-    for (list.items) |citem| {
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try citem.log(writer, indent + 1);
-    }
-    try writer.writeByteNTimes(' ', indent * 2);
-    try writer.writeAll("]\n");
-}
 pub const ZMacro = struct {
     parameters: ?std.StringArrayHashMap(?ConcatList) = null,
     value: ConcatList,
@@ -386,39 +251,7 @@ pub const ZMacro = struct {
     pub fn format(value: ZMacro, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try value.log(writer, 0);
-    }
-
-    pub fn log(self: ZMacro, writer: anytype, indent: usize) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        try writer.writeAll("ZMacro = {\n");
-
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.writeAll("parameters = ");
-        if (self.parameters) |parameters| {
-            try writer.writeAll("[\n");
-            var iter = parameters.iterator();
-            while (iter.next()) |entry| {
-                try writer.writeByteNTimes(' ', (indent + 2) * 2);
-                try writer.print("{s} = ", .{entry.key_ptr.*});
-                if (entry.value_ptr.*) |default_value| {
-                    try logConcatList(default_value, writer, indent + 2);
-                } else {
-                    try writer.writeAll("null\n");
-                }
-            }
-            try writer.writeByteNTimes(' ', (indent + 1) * 2);
-            try writer.writeAll("]\n");
-        } else {
-            try writer.writeAll("null\n");
-        }
-
-        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-        try writer.writeAll("value = ");
-        try logConcatList(self.value, writer, indent + 1);
-
-        try writer.writeByteNTimes(' ', indent * 2);
-        try writer.writeAll("}\n");
+        try log.logZMacro(value, writer, 0);
     }
 };
 pub const ReductionContext = struct {
@@ -428,26 +261,7 @@ pub const ReductionContext = struct {
     pub fn format(value: ReductionContext, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try value.log(writer);
-    }
-
-    pub fn log(self: ReductionContext, writer: anytype) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        try writer.writeAll("ReductionContext = {\n");
-
-        try writer.writeAll("  expr_args = ");
-        if (self.expr_args) |expr_args| {
-            try writer.writeAll("{\n");
-            var iter = expr_args.iterator();
-            while (iter.next()) |entry| {
-                try writer.print("    {s} = ", .{entry.key_ptr.*});
-                try logConcatList(entry.value_ptr.*, writer, 3);
-            }
-        } else {
-            try writer.writeAll("null\n");
-        }
-
-        try writer.writeAll("}\n");
+        try log.logReductionContext(value, writer);
     }
 };
 pub fn reduce
@@ -460,13 +274,13 @@ pub fn reduce
     )
     anyerror!bool
 {
-    if (util.DEBUG) {
-        const held = std.debug.getStderrMutex().acquire();
-        defer held.release();
+    if (log.LOGGING) {
+        std.debug.getStderrMutex().lock();
+        defer std.debug.getStderrMutex().unlock();
         const stderr = std.io.getStdErr().writer();
         try stderr.print("\n---[Reducing ConcatList]---\n{struct}\n", .{ctx_});
         {
-            try logConcatList(concat_list_, stderr, 0);
+            try log.logConcatList(concat_list_, stderr, 0);
         }
         if (accessors_) |acs| {
             try stderr.writeAll("accessors = [\n");
@@ -563,9 +377,9 @@ pub fn reduce
         }
     }
 
-    if (util.DEBUG) {
-        const held = std.debug.getStderrMutex().acquire();
-        defer held.release();
+    if (log.LOGGING) {
+        std.debug.getStderrMutex().lock();
+        defer std.debug.getStderrMutex().unlock();
         const stderr = std.io.getStdErr().writer();
         try stderr.print("\n---[Result]---\n{struct}\n", .{result_.*});
     }
@@ -587,63 +401,7 @@ pub const StackElem = union(enum) {
     pub fn format(value: StackElem, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try value.log(writer, 0);
-    }
-    pub fn log(self: StackElem, writer: anytype, indent: usize) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        switch (self) {
-            .TopLevelObject => |obj| {
-                const o = ZValue{ .Object = obj };
-                try o.log(writer, indent);
-            },
-            .Key => |k| try writer.print("Key = {s}\n", .{k}),
-            .CList => |l| {
-                try logConcatList(l, writer, indent);
-            },
-            .CItem => |c| try c.log(writer, indent),
-            .Placeholder => try writer.writeAll("Placeholder\n"),
-            .ExprArgList => |elist| {
-                try writer.writeAll("ExprArgList = [\n");
-                for (elist.items) |eitem| {
-                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                    try eitem.log(writer, indent + 1);
-                }
-                try writer.writeAll("]\n");
-            },
-            .BSet => |bset| {
-                try writer.writeAll("BSet = [\n");
-                for (bset.items) |arr| {
-                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                    try writer.writeAll("[\n");
-                    for (arr.items) |item| {
-                        try writer.writeByteNTimes(' ', (indent + 2) * 2);
-                        try logConcatList(item, writer, indent + 2);
-                    }
-                    try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                    try writer.writeAll("]\n");
-                }
-                try writer.writeAll("]\n");
-            },
-            .ParamMap => |pm| {
-                if (pm) |map| {
-                    try writer.writeAll("ParamMap = {\n");
-                    var iter = map.iterator();
-                    while (iter.next()) |entry| {
-                        try writer.writeByteNTimes(' ', (indent + 1) * 2);
-                        try writer.print("{s} = ", .{entry.key_ptr.*});
-                        if (entry.value_ptr.*) |c_list| {
-                            try logConcatList(c_list, writer, indent + 1);
-                        } else {
-                            try writer.writeAll("null\n");
-                        }
-                    }
-                    try writer.writeAll("}\n");
-                } else {
-                    try writer.writeAll("ParamMap = null\n");
-                }
-            },
-            .MacroDeclParam => |p| try writer.print("MacroDeclParam = {s}\n", .{p}),
-        }
+        try log.logStackElem(value, writer, 0);
     }
 };
 

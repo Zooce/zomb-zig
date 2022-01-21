@@ -1,5 +1,5 @@
 const std = @import("std");
-const util = @import("util.zig");
+const log = @import("log.zig");
 // const Scanner = @import("scan.zig").Scanner;
 
 /// These are the delimiters that will be used as tokens.
@@ -31,7 +31,9 @@ const DelimiterNonToken = enum(u8) {
 
 /// A enum that represents all individual delimiters (regardless of their use as actual tokens).
 const Delimiter = @Type(blk: {
-    const fields = @typeInfo(DelimiterToken).Enum.fields ++ @typeInfo(DelimiterNonToken).Enum.fields ++ &[_]std.builtin.TypeInfo.EnumField{.{ .name = "None", .value = 0 }};
+    const fields = @typeInfo(DelimiterToken).Enum.fields
+        ++ @typeInfo(DelimiterNonToken).Enum.fields
+        ++ &[_]std.builtin.TypeInfo.EnumField{.{ .name = "None", .value = 0 }};
 
     break :blk .{
         .Enum = .{
@@ -58,7 +60,6 @@ const delimiters = blk: {
 /// Special token types (usually a combination of Delimiters and strings)
 const SpecialToken = enum(u8) {
     None = 0,
-    Newline,
     Comment,
     String,
     RawString,
@@ -112,24 +113,6 @@ pub const Token = struct {
         }
         return buffer_[self.offset .. self.offset + self.size];
     }
-
-    pub fn log(self: Self, writer_: anytype, input_: []const u8) anyerror!void {
-        if (!util.DEBUG) return;
-        try writer_.print(
-            \\----[Token]----
-            \\Type  = {}
-            \\Value = {s}
-            \\Line  = {}
-            \\Valid = {}
-            \\
-            , .{
-                self.token_type,
-                try self.slice(input_),
-                self.line,
-                self.is_valid,
-            }
-        );
-    }
 };
 
 /// Parses tokens from the given input buffer.
@@ -161,24 +144,6 @@ pub const Tokenizer = struct {
 
     /// The token currently being discovered
     token: Token = Token{},
-
-    pub fn log(self: Self, writer_: anytype) std.os.WriteError!void {
-        if (!util.DEBUG) return;
-        try writer_.print(
-            \\----[Tokenizer]----
-            \\State = {}
-            \\Stage = {}
-            \\Line = {}
-            \\End = {}
-            \\
-            , .{
-                self.state,
-                self.state_stage,
-                self.current_line,
-                self.at_end_of_buffer,
-            }
-        );
-    }
 
     pub fn init(buffer_: []const u8) Self {
         return Self{
@@ -218,8 +183,10 @@ pub const Tokenizer = struct {
 
             switch (self.state) {
                 .None => {
+                    // we don't care about separators - if we can't skip separators then we're at the end of the file
                     if ((try self.skipSeparators()) == false) return null;
 
+                    // since we have no current token (.None state), start a new one
                     self.token = Token{
                         .offset = self.buffer_cursor,
                         .line = self.current_line,
@@ -269,8 +236,8 @@ pub const Tokenizer = struct {
 
                 .QuotedString => switch (self.state_stage) {
                     0 => { // starting quotation mark
-                        if (self.advance().? != '"') return error.UnexpectedCommonQuotedStringStage0Byte;
-                        self.token.offset = self.buffer_cursor;
+                        if (self.advance().? != '"') return error.UnexpectedQuotedStringStage0Byte;
+                        self.token.offset = self.buffer_cursor; // this string starts after the quotation mark (it's just a delimiter)
                         self.state_stage = 1;
                     },
                     1 => if (self.consumeToBytes("\\\"")) |_| { // non-escaped bytes or ending quotation mark
@@ -307,7 +274,7 @@ pub const Tokenizer = struct {
                         try self.consumeHex();
                         self.state_stage = 1;
                     },
-                    else => return error.UnexpectedCommonQuotedStringStage,
+                    else => return error.UnexpectedQuotedStringStage,
                 },
 
                 .MacroX => switch (self.state_stage) {

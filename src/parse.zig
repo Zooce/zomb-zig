@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const util = @import("util.zig");
+const log = @import("log.zig");
 
 const Tokenizer = @import("token.zig").Tokenizer;
 const Token = @import("token.zig").Token;
@@ -117,10 +117,10 @@ pub const Parser = struct {
         var done = false;
         while (!done) {
             count += 1;
-            try self.log(count, "Pre-Step");
+            try log.logParser(self.*, count, "Pre-Step");
             try self.step();
             if (self.state_machine.state == .Decl) {
-                try self.log(count, "Pre-Decl Consume");
+                try log.logParser(self.*, count, "Pre-Decl Consume");
                 try self.consumeAtTopLevel(out_arena.allocator());
             }
             done = self.token == null and self.stack.items.len == 1;
@@ -389,7 +389,7 @@ pub const Parser = struct {
         try self.state_machine.transition(self.token.?.token_type);
         // get a new token if necessary - we must do this _after_ the state machine transition
         if (!keep_token) {
-            if (util.DEBUG) std.debug.print("getting new token...\n", .{});
+            if (log.LOGGING) std.debug.print("getting new token...\n", .{});
             self.token = try self.tokenizer.next();
         }
     }
@@ -442,7 +442,7 @@ const StringReader = @import("string_reader.zig").StringReader;
 const StringParser = Parser(StringReader, 32);
 
 fn parseTestInput(input_: []const u8) !Zomb {
-    if (util.DEBUG) {
+    if (log.LOGGING) {
         std.debug.print(
             \\
             \\----[Test Input]----

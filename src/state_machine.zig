@@ -1,7 +1,7 @@
 const std = @import("std");
 const TokenType = @import("token.zig").TokenType;
 const testing = std.testing;
-const util = @import("util.zig");
+const log = @import("log.zig");
 
 const StackWidth = u128;
 const StackElemWidth = u4; // TODO: we have an extra bit here so it's easier to debug - change this to u3 later?
@@ -117,21 +117,10 @@ pub const StateMachine = struct {
         return @intToEnum(State, self.stack & 0b1111);
     }
 
-    pub fn log(self: Self, writer_: anytype) std.os.WriteError!void {
-        try writer_.print(
-            \\----[State Machine]----
-            \\State = {}
-            \\Stack = 0x{X:0>32}
-            \\Size  = {}
-            \\
-            , .{ self.state, self.stack, self.stack_size }
-        );
-    }
-
     /// Transition the state machine to the next state. This will catch all the
     /// expected token type errors.
     pub fn transition(self: *Self, token_: TokenType) !void {
-        if (util.DEBUG) {
+        if (log.LOGGING) {
             std.debug.print("{} --({})--> ", .{self.state, token_});
         }
         // we can still transition even if the token type is .None
@@ -286,7 +275,7 @@ pub const StateMachine = struct {
                 else => try self.push(.MacroExprBatchArgsBegin),
             },
         }
-        if (util.DEBUG) {
+        if (log.LOGGING) {
             std.debug.print("{}\n", .{self.state});
         }
     }
