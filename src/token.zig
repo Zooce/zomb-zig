@@ -2,6 +2,28 @@ const std = @import("std");
 const log = @import("log.zig");
 // const Scanner = @import("scan.zig").Scanner;
 
+const TokenError = error {
+    UnexpectedQuotedStringStage0Byte,
+    UnexpectedMacroXStage0Byte,
+    UnexpectedRawStringStage0Byte,
+    UnexpectedRawStringStage1Byte,
+    UnexpectedRawStringStage3Byte,
+    UnexpectedBareStringOrCommentStage0Byte,
+
+    UnexpectedQuotedStringStage,
+    UnexpectedMacroXStage,
+    UnexpectedRawStringStage,
+    UnexpectedBareStringOrCommentStage,
+
+    TokenOffsetTooBig,
+    TokenSizeTooBig,
+    InvalidControlCharacter,
+    InvalidEscapedByte,
+    InvalidHex,
+    CarriageReturnError,
+    TooManyCommas,
+};
+
 /// These are the delimiters that will be used as tokens.
 const DelimiterToken = enum(u8) {
     Percent = '%', // 0x25  37
@@ -106,10 +128,10 @@ pub const Token = struct {
     /// Given the original input, return the slice of that input which this token represents.
     pub fn slice(self: Self, buffer_: []const u8) ![]const u8 {
         if (self.offset > buffer_.len) {
-            return error.TokenOffsetTooBig;
+            return TokenError.TokenOffsetTooBig;
         }
         if (self.offset + self.size > buffer_.len) {
-            return error.TokenSizeTooBig;
+            return TokenError.TokenSizeTooBig;
         }
         return buffer_[self.offset .. self.offset + self.size];
     }
@@ -217,7 +239,7 @@ pub const Tokenizer = struct {
                         },
                         .None => {
                             switch (byte) {
-                                0x00...0x1F => return error.InvalidControlCharacter,
+                                0x00...0x1F => return TokenError.InvalidControlCharacter,
                                 '/' => self.state = State.BareStringOrComment,
                                 else => {
                                     self.token.token_type = TokenType.String;
@@ -236,7 +258,7 @@ pub const Tokenizer = struct {
 
                 .QuotedString => switch (self.state_stage) {
                     0 => { // starting quotation mark
-                        if (self.advance().? != '"') return error.UnexpectedQuotedStringStage0Byte;
+                        if (self.advance().? != '"') return TokenError.UnexpectedQuotedStringStage0Byte;
                         self.token.offset = self.buffer_cursor; // this string starts after the quotation mark (it's just a delimiter)
                         self.state_stage = 1;
                     },
@@ -274,7 +296,7 @@ pub const Tokenizer = struct {
                         try self.consumeHex();
                         self.state_stage = 1;
                     },
-                    else => return error.UnexpectedQuotedStringStage,
+                    else => return TokenError.UnexpectedQuotedStringStage,
                 },
 
                 .MacroX => switch (self.state_stage) {
@@ -287,7 +309,7 @@ pub const Tokenizer = struct {
                             _ = self.consume().?;
                             self.state_stage = 1;
                         },
-                        else => return error.UnexpectedMacroXStage0Byte,
+                        else => return TokenError.UnexpectedMacroXStage0Byte,
                     },
                     1 => switch (self.peek().?) { // possible single percent token
                         ' ', '\t', '\r', '\n', '[' => {
@@ -310,7 +332,7 @@ pub const Tokenizer = struct {
                         }
                         self.token.offset = self.buffer_cursor;
                     },
-                    else => return error.UnexpectedMacroXStage,
+                    else => return TokenError.UnexpectedMacroXStage,
                 },
 
                 .BareString => {
@@ -326,11 +348,11 @@ pub const Tokenizer = struct {
 
                 .RawString => switch (self.state_stage) {
                     0 => { // first reverse solidus
-                        if (self.advance().? != '\\') return error.UnexpectedRawStringStage0Byte;
+                        if (self.advance().? != '\\') return TokenError.UnexpectedRawStringStage0Byte;
                         self.state_stage = 1;
                     },
                     1 => { // second reverse solidus
-                        if (self.advance().? != '\\') return error.UnexpectedRawStringStage1Byte;
+                        if (self.advance().? != '\\') return TokenError.UnexpectedRawStringStage1Byte;
 
                         // we may be continuing a raw string and since raw string tokens are broken into
                         // their individual lines (for parsing reasons) we need to make sure this is a new token and not
@@ -364,7 +386,7 @@ pub const Tokenizer = struct {
                         }
                     },
                     3 => { // ending linefeed for CRLF
-                        if (self.advance().? != '\n') return error.UnexpectedRawStringStage3Byte;
+                        if (self.advance().? != '\n') return TokenError.UnexpectedRawStringStage3Byte;
                         self.state_stage = 4;
                         self.tokenMaybeComplete();
                     },
@@ -387,12 +409,12 @@ pub const Tokenizer = struct {
                             return self.token;
                         },
                     },
-                    else => return error.UnexpectedRawStringStage,
+                    else => return TokenError.UnexpectedRawStringStage,
                 },
 
                 .BareStringOrComment => switch (self.state_stage) {
                     0 => {
-                        if (self.consume().? != '/') return error.UnexpectedBareStringOrCommentStage0Byte;
+                        if (self.consume().? != '/') return TokenError.UnexpectedBareStringOrCommentStage0Byte;
                         self.state_stage = 1;
                         // so far, this is a valid bare string
                         self.token.token_type = TokenType.String;
@@ -413,7 +435,7 @@ pub const Tokenizer = struct {
                         self.tokenComplete();
                         return self.token;
                     },
-                    else => return error.UnexpectedBareStringOrCommentStage,
+                    else => return TokenError.UnexpectedBareStringOrCommentStage,
                 },
             } // end state switch
         } // end :loop
@@ -496,10 +518,10 @@ pub const Tokenizer = struct {
         if (self.consume()) |byte| {
             switch (byte) {
                 'b', 'f', 'n', 'r', 't', 'u', '\\', '\"' => return byte,
-                else => return error.InvalidEscapedByte,
+                else => return TokenError.InvalidEscapedByte,
             }
         }
-        return error.InvalidEscapedByte;
+        return TokenError.InvalidEscapedByte;
     }
 
     /// Consumes the next byte and expects it to be a valid HEX character.
@@ -507,16 +529,16 @@ pub const Tokenizer = struct {
         if (self.consume()) |byte| {
             switch (byte) {
                 '0'...'9', 'A'...'F', 'a'...'f' => return,
-                else => return error.InvalidHex,
+                else => return TokenError.InvalidHex,
             }
         }
-        return error.InvalidHex;
+        return TokenError.InvalidHex;
     }
 
     /// Advances the buffer cursor until a non-separator byte is encountered and returns `true`. If
     /// no non-separator is encountered, this returns `false`. If more than one comma is encountered
-    /// then `error.TooManyCommas` is returned. If an invalid CRLF is encountered then
-    /// `error.CarriageReturnError` is returned.
+    /// then `TokenError.TooManyCommas` is returned. If an invalid CRLF is encountered then
+    /// `TokenError.CarriageReturnError` is returned.
     fn skipSeparators(self: *Self) !bool {
         var found_comma = false;
         while (self.peek()) |byte| {
@@ -529,12 +551,12 @@ pub const Tokenizer = struct {
                     if ((self.peek() orelse 0) == '\n') {
                         _ = self.advance();
                     } else {
-                        return error.CarriageReturnError;
+                        return TokenError.CarriageReturnError;
                     }
                 },
                 ',' => {
                     if (found_comma) {
-                        return error.TooManyCommas;
+                        return TokenError.TooManyCommas;
                     }
                     found_comma = true;
                     _ = self.advance();
@@ -566,6 +588,11 @@ const ExpectedToken = struct {
     is_valid: bool = true,
 };
 
+const TokenTestError = error {
+    TokenTestFailure,
+    NullToken,
+};
+
 fn expectToken(expected_token_: ExpectedToken, token_: Token, orig_str_: []const u8) !void {
     const str = try token_.slice(orig_str_);
     var ok = true;
@@ -583,14 +610,14 @@ fn expectToken(expected_token_: ExpectedToken, token_: Token, orig_str_: []const
     };
 
     if (!ok) {
-        return error.TokenTestFailure;
+        return TokenTestError.TokenTestFailure;
     }
 }
 
 fn doTokenTest(str_: []const u8, expected_tokens_: []const ExpectedToken) !void {
     var tokenizer = Tokenizer.init(str_);
     for (expected_tokens_) |expected_token, i| {
-        const actual_token = (try tokenizer.next()) orelse return error.NullToken;
+        const actual_token = (try tokenizer.next()) orelse return TokenTestError.NullToken;
         errdefer {
             std.debug.print(
                 \\

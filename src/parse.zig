@@ -15,6 +15,17 @@ const ZMacro = @import("data.zig").ZMacro;
 const StackElem = @import("data.zig").StackElem;
 const reduce = @import("data.zig").reduce;
 
+const ParseError = error {
+    UnusedMacroParamter,
+    NoMacroToConsume,
+    UseOfParameterAsDefaultValue,
+    InvalidParameterUse,
+    MacroParamKeyUsedOutsideMacroDecl,
+    DuplicateMacroName,
+    EmptyMacroDeclParams,
+    MacroNotYetDeclared,
+    KeyNotFound,
+};
 const MacroValidator = struct {
     const Self = @This();
 
@@ -33,7 +44,7 @@ const MacroValidator = struct {
             var iter = param_counts.iterator();
             while (iter.next()) |entry| {
                 if (entry.value_ptr.* == 0) {
-                    return error.UnusedMacroParamter;
+                    return ParseError.UnusedMacroParamter;
                 }
             }
         }
@@ -47,6 +58,11 @@ pub const Zomb = struct {
     pub fn deinit(self: @This()) void {
         self.arena.deinit();
     }
+};
+
+const StackError = error {
+    UnexpectedStackElemDuringMacroExprArgsOrBatchListConsumption,
+    UnexpectedStackElemDuringMacroExprArgConsumption,
 };
 
 pub const Parser = struct {
@@ -188,7 +204,7 @@ pub const Parser = struct {
                     .BSet => |batch_set| {
                         expr.*.batch_args_list = batch_set;
                     },
-                    else => return error.UnexpectedStackElemDuringMacroExprArgsOrBatchListConsumption,
+                    else => return StackError.UnexpectedStackElemDuringMacroExprArgsOrBatchListConsumption,
                 }
             },
             .ConsumeMacroExprBatchArgsList => {
@@ -205,7 +221,7 @@ pub const Parser = struct {
                         try expr_args.*.append(.{ .CList = c_list });
                     },
                     .Placeholder => try expr_args.*.append(.BatchPlaceholder),
-                    else => return error.UnexpectedStackElemDuringMacroExprArgConsumption,
+                    else => return StackError.UnexpectedStackElemDuringMacroExprArgConsumption,
                 }
             },
             .ConsumeMacroExprBatchArgs => {
@@ -245,16 +261,16 @@ pub const Parser = struct {
                     .MacroParamKey => {
                         if (self.macro_validator) |*macro_validator| {
                             if (macro_validator.current_param != null) {
-                                return error.UseOfParameterAsDefaultValue;
+                                return ParseError.UseOfParameterAsDefaultValue;
                             }
                             if (macro_validator.param_counts.?.getPtr(token_slice)) |p| {
                                 p.* += 1; // count the usage of this parameter
                             } else {
-                                return error.InvalidParameterUse;
+                                return ParseError.InvalidParameterUse;
                             }
                             try self.stack.append(.{ .CItem = .{ .Parameter = token_slice } });
                         } else {
-                            return error.MacroParamKeyUsedOutsideMacroDecl;
+                            return ParseError.MacroParamKeyUsedOutsideMacroDecl;
                         }
                     },
                     .Question => try self.stack.append(.Placeholder),
@@ -293,7 +309,7 @@ pub const Parser = struct {
             // Macro Declaration
             .MacroDeclKey => {
                 if (self.macros.contains(token_slice)) {
-                    return error.DuplicateMacroName;
+                    return ParseError.DuplicateMacroName;
                 }
                 try self.stack.append(.{ .Key =  token_slice });
                 self.macro_validator = MacroValidator{};
@@ -326,7 +342,7 @@ pub const Parser = struct {
                 self.macro_validator.?.current_param = null;
                 if (self.token.?.token_type == .CloseParen) {
                     if (self.macro_validator.?.param_counts.?.count() == 0) {
-                        return error.EmptyMacroDeclParams;
+                        return ParseError.EmptyMacroDeclParams;
                     }
                 }
             },
@@ -334,7 +350,7 @@ pub const Parser = struct {
             // Macro Expression
             .MacroExprKey => {
                 if (!self.macros.contains(token_slice)) {
-                    return error.MacroNotYetDeclared;
+                    return ParseError.MacroNotYetDeclared;
                 }
                 try self.stack.append(.{ .CItem = .{ .Expression = .{ .key = token_slice } } });
             },
@@ -467,7 +483,7 @@ test "bare string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("value", hi);
 }
 
@@ -476,7 +492,7 @@ test "empty quoted string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("", hi);
 }
 
@@ -485,7 +501,7 @@ test "quoted string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("value", hi);
 }
 
@@ -494,7 +510,7 @@ test "empty raw string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("", hi);
 }
 
@@ -503,7 +519,7 @@ test "one line raw string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("value", hi);
 }
 
@@ -515,7 +531,7 @@ test "two line raw string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("one\ntwo", hi);
 }
 
@@ -528,7 +544,7 @@ test "raw string value with empty newline in the middle" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("one\n\ntwo", hi);
 }
 
@@ -537,7 +553,7 @@ test "bare string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("onetwothree", hi);
 }
 
@@ -548,7 +564,7 @@ test "quoted string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("one two three", hi);
 }
 
@@ -561,7 +577,7 @@ test "raw string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("part one\npart two", hi);
 }
 
@@ -573,7 +589,7 @@ test "general string concatenation" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("bare_stringquoted stringraw\nstring", hi);
 }
 
@@ -584,7 +600,7 @@ test "quoted key" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const value = z.map.get("quoted key") orelse return error.KeyNotFound;
+    const value = z.map.get("quoted key") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("value", value);
 }
 
@@ -593,7 +609,7 @@ test "empty object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Object);
     try testing.expectEqual(@as(usize, 0), hi.Object.count());
 }
@@ -608,11 +624,11 @@ test "basic object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Object);
-    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    const a = hi.Object.get("a") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("hello", a);
-    const b = hi.Object.get("b") orelse return error.KeyNotFound;
+    const b = hi.Object.get("b") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("goodbye", b);
 }
 
@@ -627,11 +643,11 @@ test "nested object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Object);
-    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    const a = hi.Object.get("a") orelse return ParseError.KeyNotFound;
     try testing.expect(a == .Object);
-    const b = a.Object.get("b") orelse return error.KeyNotFound;
+    const b = a.Object.get("b") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("value", b);
 }
 
@@ -642,7 +658,7 @@ test "empty array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Array);
     try testing.expectEqual(@as(usize, 0), hi.Array.items.len);
 }
@@ -652,7 +668,7 @@ test "basic array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Array);
     try testing.expectEqual(@as(usize, 3), hi.Array.items.len);
     try doZValueStringTest("a", hi.Array.items[0]);
@@ -669,7 +685,7 @@ test "nested array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Array);
     try testing.expectEqual(@as(usize, 1), hi.Array.items.len);
     const inner = hi.Array.items[0];
@@ -691,9 +707,9 @@ test "array in an object" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Object);
-    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    const a = hi.Object.get("a") orelse return ParseError.KeyNotFound;
     try testing.expect(a == .Array);
     try testing.expectEqual(@as(usize, 3), a.Array.items.len);
     try doZValueStringTest("1", a.Array.items[0]);
@@ -706,14 +722,14 @@ test "object in an array" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Array);
     try testing.expectEqual(@as(usize, 1), hi.Array.items.len);
     const item = hi.Array.items[0];
     try testing.expect(item == .Object);
-    const a = item.Object.get("a") orelse return error.KeyNotFound;
+    const a = item.Object.get("a") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("b", a);
-    const c = item.Object.get("c") orelse return error.KeyNotFound;
+    const c = item.Object.get("c") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("d", c);
 }
 
@@ -722,9 +738,9 @@ test "empty array in object" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Object);
-    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    const a = hi.Object.get("a") orelse return ParseError.KeyNotFound;
     try testing.expect(a == .Array);
     try testing.expectEqual(@as(usize, 0), a.Array.items.len);
 }
@@ -734,7 +750,7 @@ test "empty object in array" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Array);
     try testing.expectEqual(@as(usize, 1), hi.Array.items.len);
     try testing.expect(hi.Array.items[0] == .Object);
@@ -751,7 +767,7 @@ test "macro - bare string value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("hello", hi);
 }
 
@@ -765,9 +781,9 @@ test "macro - object value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Object);
-    const a = hi.Object.get("a") orelse return error.KeyNotFound;
+    const a = hi.Object.get("a") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("hello", a);
 }
 
@@ -779,7 +795,7 @@ test "macro - array value" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try testing.expect(hi == .Array);
     try testing.expectEqual(@as(usize, 3), hi.Array.items.len);
     try doZValueStringTest("a", hi.Array.items[0]);
@@ -797,7 +813,7 @@ test "macro - one level object accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("hello", hi);
 }
 
@@ -809,7 +825,7 @@ test "macro - one level array accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("goodbye", hi);
 }
 
@@ -823,7 +839,7 @@ test "macro - object in object accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("hello", hi);
 }
 
@@ -835,7 +851,7 @@ test "macro - array in array accessor" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const hi = z.map.get("hi") orelse return error.KeyNotFound;
+    const hi = z.map.get("hi") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("b", hi);
 }
 
@@ -854,13 +870,15 @@ test "macro - macro expression in macro declaration" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const colorized = z.map.get("colorized") orelse return error.KeyNotFound;
+    const colorized = z.map.get("colorized") orelse return ParseError.KeyNotFound;
     try testing.expect(colorized == .Object);
-    const scope = colorized.Object.get("scope") orelse return error.KeyNotFound;
+    const scope = colorized.Object.get("scope") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("hello world", scope);
-    const color = colorized.Object.get("color") orelse return error.KeyNotFound;
+    const color = colorized.Object.get("color") orelse return ParseError.KeyNotFound;
     try doZValueStringTest("#0000000F", color);
 }
+
+const TestInvalidIndex = error.InvalidIndex;
 
 test "macro batching with default parameter" {
     const input =
@@ -886,29 +904,29 @@ test "macro batching with default parameter" {
     const z = try parseTestInput(input);
     defer z.deinit();
 
-    const token_colors = z.map.get("tokenColors") orelse return error.KeyNotFound;
+    const token_colors = z.map.get("tokenColors") orelse return ParseError.KeyNotFound;
     try testing.expect(token_colors == .Array);
     try testing.expectEqual(@as(usize, 4), token_colors.Array.items.len);
     for (token_colors.Array.items) |colorized, i| {
         try testing.expect(colorized == .Object);
-        const scope = colorized.Object.get("scope") orelse return error.KeyNotFound;
+        const scope = colorized.Object.get("scope") orelse return ParseError.KeyNotFound;
         var expected = switch (i) {
             0 => "editor.background",
             1 => "editor.border",
             2 => "editor.foreground",
             3 => "editor.highlightBorder",
-            else => return error.InvalidIndex,
+            else => return TestInvalidIndex,
         };
         try doZValueStringTest(expected, scope);
-        const settings = colorized.Object.get("settings") orelse return error.KeyNotFound;
+        const settings = colorized.Object.get("settings") orelse return ParseError.KeyNotFound;
         try testing.expect(settings == .Object);
-        const foreground = settings.Object.get("foreground") orelse return error.KeyNotFound;
+        const foreground = settings.Object.get("foreground") orelse return ParseError.KeyNotFound;
         expected = switch (i) {
             0 => "#00000055",
             1 => "#00000066",
             2 => "#ff0000ff",
             3 => "#ff0000ff",
-            else => return error.InvalidIndex,
+            else => return TestInvalidIndex,
         };
         try doZValueStringTest(expected, foreground);
     }

@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const ScanEndOfStreamError = error.EndOfStream;
+
 pub fn Scanner(comptime InputType: type, max_buffer_size_: anytype) type {
     return struct {
         const Self = @This();
@@ -96,7 +98,7 @@ pub fn Scanner(comptime InputType: type, max_buffer_size_: anytype) type {
                     return null;
                 };
                 const byte = self.reader.readByte() catch |err| {
-                    if (err != error.EndOfStream) {
+                    if (err != ScanEndOfStreamError) {
                         std.log.err("Unable to read byte: {}", .{err});
                     }
                     return null;

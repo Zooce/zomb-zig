@@ -17,7 +17,7 @@ const StateMachine = @import("state_machine.zig").StateMachine;
 const Token = @import("token.zig").Token;
 const Tokenizer = @import("token.zig").Tokenizer;
 
-pub const LOGGING = true;
+pub const LOGGING = false;
 
 pub fn logConcatItem(citem: ConcatItem, writer: anytype, indent: usize) std.os.WriteError!void {
     if (!LOGGING) return;

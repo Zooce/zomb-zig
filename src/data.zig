@@ -2,6 +2,17 @@ const std = @import("std");
 
 const log = @import("log.zig");
 
+const DataError = error {
+    MacroKeyNotFound,
+    DuplicateKey,
+    MissingDefaultValue,
+    CannotReduceEmptyConcatList,
+    AttemptToAccessString,
+    InvalidMacroParameter,
+    NoParamArgsProvided,
+    KeyNotFound,
+};
+
 /// This is the type that ZOMB files deserialize into.
 pub const ZValue = union(enum) {
     Object: std.StringArrayHashMap(ZValue),
@@ -58,7 +69,7 @@ pub const ZExpr = struct {
         )
         !void
     {
-        const macro = macros_.get(self.key) orelse return error.MacroKeyNotFound;
+        const macro = macros_.get(self.key) orelse return DataError.MacroKeyNotFound;
         self.args = std.StringArrayHashMap(ZExprArg).init(allocator_);
         for (macro.parameters.?.keys()) |key, i| {
             if (i < args_.items.len) {
@@ -78,7 +89,7 @@ pub const ZExpr = struct {
         anyerror!bool
     {
         // get the macro for this expression
-        const macro = ctx_.macros.get(self.key) orelse return error.MacroKeyNotFound;
+        const macro = ctx_.macros.get(self.key) orelse return DataError.MacroKeyNotFound;
         if (log.LOGGING) std.debug.print("evaluating macro -> {struct}", .{macro});
 
         // use the macro default args if necessary
@@ -170,7 +181,7 @@ pub const ZExpr = struct {
         while (arg_iter.next()) |entry| {
             const key = entry.key_ptr.*;
             var res = try expr_args.getOrPut(key);
-            if (res.found_existing) return error.DuplicateKey;
+            if (res.found_existing) return DataError.DuplicateKey;
             res.value_ptr.* = ConcatList.init(allocator_);
             const val = entry.value_ptr.*;
             switch (val) {
@@ -212,7 +223,7 @@ pub const ZExpr = struct {
                 }
                 const val = entry.value_ptr.*;
                 if (val == null) {
-                    return error.MissingDefaultValue;
+                    return DataError.MissingDefaultValue;
                 }
                 try expr_args.putNoClobber(key, val.?);
             }
@@ -291,7 +302,7 @@ pub fn reduce
         }
     }
     if (concat_list_.items.len == 0) {
-        return error.CannotReduceEmptyConcatList;
+        return DataError.CannotReduceEmptyConcatList;
     }
     const has_accessors = accessors_ != null and accessors_.?.len > 0;
     const array_index: usize = idxblk: {
@@ -351,7 +362,7 @@ pub fn reduce
                 }
             },
             .String => |str| {
-                if (has_accessors) return error.AttemptToAccessString;
+                if (has_accessors) return DataError.AttemptToAccessString;
                 if (init_res) {
                     result_.* = .{ .String = std.ArrayList(u8).init(allocator_) };
                 }
@@ -359,13 +370,13 @@ pub fn reduce
             },
             .Parameter => |par| {
                 if (ctx_.expr_args) |args| {
-                    const c_list = args.get(par) orelse return error.InvalidMacroParameter;
+                    const c_list = args.get(par) orelse return DataError.InvalidMacroParameter;
                     const did_reduce = try reduce(allocator_, c_list, result_, has_accessors or init_res, accessors_, ctx_);
                     if (has_accessors) {
                         return did_reduce;
                     }
                 } else {
-                    return error.NoParamArgsProvided;
+                    return DataError.NoParamArgsProvided;
                 }
             },
             .Expression => |exp| {
@@ -450,8 +461,8 @@ test "concat list of objects reduction - no macros" {
 
     // test the result
     try std.testing.expect(result == .Object);
-    const b = result.Object.get("a") orelse return error.KeyNotFound;
-    const d = result.Object.get("c") orelse return error.KeyNotFound;
+    const b = result.Object.get("a") orelse return DataError.KeyNotFound;
+    const d = result.Object.get("c") orelse return DataError.KeyNotFound;
     try std.testing.expectEqualStrings("b", b.String.items);
     try std.testing.expectEqualStrings("d", d.String.items);
 }
@@ -949,7 +960,7 @@ test "crazy batched macro expression inside another macro expression" {
     // { key = [ "Zooce100Hello, WorldAF", "ZooceZooceHello, WorldAF", "Zooce10000Hello, WorldAF" ] }
     try std.testing.expect(result == .Object);
     try std.testing.expectEqual(@as(usize, 1), result.Object.count());
-    const key_arr = result.Object.get("key") orelse return error.KeyNotFound;
+    const key_arr = result.Object.get("key") orelse return DataError.KeyNotFound;
     try std.testing.expect(key_arr == .Array);
     try std.testing.expectEqual(@as(usize, 3), key_arr.Array.items.len);
     try std.testing.expectEqualStrings("Zooce100Hello, World!AF", key_arr.Array.items[0].String.items);

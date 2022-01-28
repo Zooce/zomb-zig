@@ -8,6 +8,32 @@ const StackElemWidth = u4; // TODO: we have an extra bit here so it's easier to 
 const STACK_SHIFT = @bitSizeOf(StackElemWidth);
 pub const MAX_STACK_SIZE = @bitSizeOf(StackWidth) / STACK_SHIFT; // add more stacks if we need more?
 
+const StateMachineError = error {
+    UnexpectedStateOnStack,
+    UnexpectedDeclToken,
+    UnexpectedEqualsToken,
+    UnexpectedValueToken,
+    UnexpectedObjectBeginToken,
+    UnexpectedKeyToken,
+    UnexpectedObjectEndToken,
+    UnexpectedArrayBeginToken,
+    UnexpectedMacroDeclKeyToken,
+    UnexpectedMacroDeclOptionalParamsToken,
+    UnexpectedMacroDeclParamToken,
+    UnexpectedMacroDeclParamOptionalDefaultValueToken,
+    UnexpectedConsumeMacroDeclParamToken,
+    UnexpectedConsumeMacroDeclDefaultParamToken,
+    UnexpectedMacroDeclParamsEndToken,
+    UnexpectedMacroExprKeyToken,
+    UnexpectedMacroExprArgsBeginToken,
+    UnexpectedMacroExprBatchListBeginToken,
+    UnexpectedMacroExprBatchArgsBegin,
+    TooManyStateStackPushes,
+    BadStatePush,
+    TooManyStateStackPops,
+};
+
+/// The current state tells us what we're supposed to be doing with the current token.
 pub const State = enum {
     ObjectBegin,                // 0
     ArrayBegin,                 // 1
@@ -62,7 +88,7 @@ pub const StateMachine = struct {
 
     pub fn push(self: *Self, state_: State) !void {
         if (self.stack_size > MAX_STACK_SIZE) {
-            return error.TooManyStateStackPushes;
+            return StateMachineError.TooManyStateStackPushes;
         }
         switch (state_) {
             .ObjectBegin,
@@ -73,7 +99,7 @@ pub const StateMachine = struct {
             .MacroExprBatchListBegin,
             .MacroExprBatchArgsBegin,
             .Value, => {},
-            else => return error.BadStatePush,
+            else => return StateMachineError.BadStatePush,
         }
         // update stack
         self.stack <<= STACK_SHIFT;
@@ -100,13 +126,13 @@ pub const StateMachine = struct {
                     .MacroExprBatchListBegin => .ConsumeMacroExprBatchArgsList,
                     .MacroExprBatchArgsBegin => .ConsumeMacroExprBatchArgs,
                     .Value => .ValueConcat,
-                    else => return error.UnexpectedStateOnStack,
+                    else => return StateMachineError.UnexpectedStateOnStack,
                 };
             } else {
                 self.state = .Decl;
             }
         } else {
-            return error.TooManyStateStackPops;
+            return StateMachineError.TooManyStateStackPops;
         }
     }
 
@@ -128,11 +154,11 @@ pub const StateMachine = struct {
             .Decl => self.state = switch (token_) {
                 .MacroKey => .MacroDeclKey,
                 .String => .Key,
-                else => return error.UnexpectedDeclToken,
+                else => return StateMachineError.UnexpectedDeclToken,
             },
             .Equals => switch (token_) {
                 .Equals => self.state = .ValueEnter,
-                else => return error.UnexpectedEqualsToken,
+                else => return StateMachineError.UnexpectedEqualsToken,
             },
             .ValueEnter => switch (token_) {
                 .CloseSquare => self.state = .ArrayEnd,
@@ -144,7 +170,7 @@ pub const StateMachine = struct {
                 .OpenCurly => try self.push(.ObjectBegin),
                 .OpenSquare => try self.push(.ArrayBegin),
                 .Question => try self.pop(), // we forbid placeholder concatenation....TODO: do we really need to?
-                else => return error.UnexpectedValueToken,
+                else => return StateMachineError.UnexpectedValueToken,
             },
             .ValueConcat => switch (token_) {
                 .Plus, .RawString => self.state = .Value,
@@ -154,24 +180,24 @@ pub const StateMachine = struct {
             // Object
             .ObjectBegin => self.state = switch (token_) {
                 .OpenCurly => .Key,
-                else => return error.UnexpectedObjectBeginToken,
+                else => return StateMachineError.UnexpectedObjectBeginToken,
             },
             .Key => self.state = switch (token_) {
                 .String => .Equals,
                 .CloseCurly => .ObjectEnd,
-                else => return error.UnexpectedKeyToken,
+                else => return StateMachineError.UnexpectedKeyToken,
             },
             .ConsumeObjectEntry => self.state = .ObjectEnd,
             .ObjectEnd => switch (token_) {
                 .String => self.state = .Key,
                 .CloseCurly => try self.pop(),
-                else => return error.UnexpectedObjectEndToken,
+                else => return StateMachineError.UnexpectedObjectEndToken,
             },
 
             // Array
             .ArrayBegin => switch (token_) {
                 .OpenSquare => self.state = .ValueEnter,
-                else => return error.UnexpectedArrayBeginToken,
+                else => return StateMachineError.UnexpectedArrayBeginToken,
             },
             .ConsumeArrayItem => self.state = .ArrayEnd,
             .ArrayEnd => switch (token_) {
@@ -182,17 +208,17 @@ pub const StateMachine = struct {
             // Macro Decl
             .MacroDeclKey => self.state = switch (token_) {
                 .MacroKey => .MacroDeclOptionalParams,
-                else => return error.UnexpectedMacroDeclKeyToken,
+                else => return StateMachineError.UnexpectedMacroDeclKeyToken,
             },
             .MacroDeclOptionalParams => switch (token_) {
                 .OpenParen => self.state = .MacroDeclParam,
                 .Equals => self.state = .ValueEnter,
-                else => return error.UnexpectedMacroDeclOptionalParamsToken,
+                else => return StateMachineError.UnexpectedMacroDeclOptionalParamsToken,
             },
             .MacroDeclParam => switch (token_) {
                 .String => self.state = .MacroDeclParamOptionalDefaultValue,
                 .CloseParen => self.state = .MacroDeclParamsEnd,
-                else => return error.UnexpectedMacroDeclParamToken,
+                else => return StateMachineError.UnexpectedMacroDeclParamToken,
             },
             .MacroDeclParamOptionalDefaultValue => switch (token_) {
                 .Equals => {
@@ -200,30 +226,30 @@ pub const StateMachine = struct {
                     self.state = .ValueEnter;
                 },
                 .String, .CloseParen => self.state = .ConsumeMacroDeclParam,
-                else => return error.UnexpectedMacroDeclParamOptionalDefaultValueToken,
+                else => return StateMachineError.UnexpectedMacroDeclParamOptionalDefaultValueToken,
             },
             .ConsumeMacroDeclParam => self.state = switch (token_) {
                 .String => .MacroDeclParam,
                 .CloseParen => .MacroDeclParamsEnd,
-                else => return error.UnexpectedConsumeMacroDeclParamToken,
+                else => return StateMachineError.UnexpectedConsumeMacroDeclParamToken,
             },
             .ConsumeMacroDeclDefaultParam => {
                 try self.pop();
                 self.state = switch (token_) {
                     .String => .MacroDeclParam,
                     .CloseParen => .MacroDeclParamsEnd,
-                    else => return error.UnexpectedConsumeMacroDeclDefaultParamToken,
+                    else => return StateMachineError.UnexpectedConsumeMacroDeclDefaultParamToken,
                 };
             },
             .MacroDeclParamsEnd => self.state = switch (token_) {
                 .CloseParen => .Equals,
-                else => return error.UnexpectedMacroDeclParamsEndToken,
+                else => return StateMachineError.UnexpectedMacroDeclParamsEndToken,
             },
 
             // Macro Expr
             .MacroExprKey => self.state = switch (token_) {
                 .MacroKey => .MacroExprOptionalArgsOrAccessors,
-                else => return error.UnexpectedMacroExprKeyToken,
+                else => return StateMachineError.UnexpectedMacroExprKeyToken,
             },
             .MacroExprOptionalArgsOrAccessors => switch (token_) {
                 .MacroAccessor => self.state = .MacroExprOptionalAccessors,
@@ -248,7 +274,7 @@ pub const StateMachine = struct {
             // Macro Expr Args
             .MacroExprArgsBegin => switch (token_) {
                 .OpenParen => self.state = .ValueEnter,
-                else => return error.UnexpectedMacroExprArgsBeginToken,
+                else => return StateMachineError.UnexpectedMacroExprArgsBeginToken,
             },
             .ConsumeMacroExprArg => self.state = .MacroExprArgsEnd,
             .MacroExprArgsEnd => switch (token_) {
@@ -259,12 +285,12 @@ pub const StateMachine = struct {
             // Macro Expr Batch List (outter array)
             .MacroExprBatchListBegin => switch (token_) {
                 .OpenSquare => try self.push(.MacroExprBatchArgsBegin),
-                else => return error.UnexpectedMacroExprBatchListBeginToken,
+                else => return StateMachineError.UnexpectedMacroExprBatchListBeginToken,
             },
             // Macro Expr Batch Args (inner arrays)
             .MacroExprBatchArgsBegin => switch (token_) {
                 .OpenSquare => try self.push(.ArrayBegin),
-                else => return error.UnexpectedMacroExprBatchArgsBegin,
+                else => return StateMachineError.UnexpectedMacroExprBatchArgsBegin,
             },
             .ConsumeMacroExprBatchArgs => {
                 try self.pop();
