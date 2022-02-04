@@ -409,40 +409,6 @@ pub const Parser = struct {
             self.token = try self.tokenizer.next();
         }
     }
-
-    // TODO: This is for prototyping only -- remove before release
-    pub fn log(self: Self, count_: usize, tag_: []const u8) !void {
-        if (!util.DEBUG) return;
-        const held = std.debug.getStderrMutex().acquire();
-        defer held.release();
-        const stderr = std.io.getStdErr().writer();
-        try stderr.print(
-            \\
-            \\=====[[ {s} {} ]]=====
-            \\
-            , .{ tag_, count_ }
-        );
-        if (self.token) |token| {
-            try token.log(stderr, self.input);
-        } else {
-            try stderr.writeAll("----[Token]----\nnull\n");
-        }
-        // try self.tokenizer.log(stderr);
-        try self.state_machine.log(stderr);
-
-        try stderr.writeAll("----[Macros]----\n");
-        var iter = self.macros.iterator();
-        while (iter.next()) |entry| {
-            try stderr.print("{s} = {struct}", .{entry.key_ptr.*, entry.value_ptr.*});
-        }
-
-        try stderr.writeAll("----[Parse Stack]----\n");
-        for (self.stack.items) |stack_elem| {
-            try stderr.print("{union}", .{stack_elem});
-        }
-
-        try stderr.writeAll("\n");
-    }
 };
 
 //==============================================================================
