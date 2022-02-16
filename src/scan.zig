@@ -27,7 +27,7 @@ pub fn Scanner(comptime InputType: type, max_buffer_size_: anytype) type {
         reader: typeblk: {
             inline for (@typeInfo(InputType).Struct.decls) |decl| {
                 if (std.mem.eql(u8, "reader", decl.name)) {
-                    break :typeblk decl.data.Fn.return_type;
+                    break :typeblk @typeInfo(@TypeOf(@field(InputType, decl.name))).Fn.return_type.?;
                 }
             }
             @compileError("Unable to get reader type for Scanner");
