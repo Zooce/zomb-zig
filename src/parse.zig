@@ -1,4 +1,5 @@
 const std = @import("std");
+// const tracy = @import("tracy");
 
 const log = @import("log.zig");
 
@@ -26,6 +27,10 @@ const ParseError = error {
     MacroNotYetDeclared,
     KeyNotFound,
 };
+
+const StreamType = @import("sdata.zig").StreamType;
+const StreamTypeNumber = @import("sdata.zig").StreamTypeNumber;
+
 const MacroValidator = struct {
     const Self = @This();
 
@@ -76,12 +81,13 @@ pub const Parser = struct {
     macro_validator: ?MacroValidator = null,
     macros: std.StringArrayHashMap(ZMacro) = undefined,
     token: ?Token = null,
+    next_stream_types: u5 = 0,
 
     pub fn init(input_: []const u8, alloc_: std.mem.Allocator) Self {
         return Self{
             .arena = std.heap.ArenaAllocator.init(alloc_),
             .input = input_,
-            .tokenizer = Tokenizer.init(input_),
+            .tokenizer = Tokenizer.init(input_, true), // TOOD: skip comments should be configurable
         };
     }
 
@@ -90,16 +96,10 @@ pub const Parser = struct {
     }
 
     fn consumeAtTopLevel(self: *Self, allocator_: std.mem.Allocator) !void {
-        if (self.macro_validator) |*macro_validator| {
-            // std.debug.print("...consuming macro declaration...\n", .{});
-            defer macro_validator.deinit();
-            try macro_validator.validate();
-            const c_list = self.stack.pop().CList;
-            const params = self.stack.pop().ParamMap;
-            const key = self.stack.pop().Key;
-            try self.macros.putNoClobber(key, .{ .parameters = params, .value = c_list });
+        if (self.macro_validator != null) {
+            try self.consumeMacro();
         }
-        if (self.stack.items.len > 1) {
+        else if (self.stack.items.len > 1) {
             // std.debug.print("...consuming top-level object...\n", .{});
             const c_list = self.stack.pop().CList;
             defer c_list.deinit();
@@ -112,6 +112,9 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Self, allocator_: std.mem.Allocator) !Zomb {
+        // const t = tracy.trace(@src(), null);
+        // defer t.end();
+
         // initialize some temporary memory we need for parsing
         self.stack = std.ArrayList(StackElem).init(self.arena.allocator());
         self.macros = std.StringArrayHashMap(ZMacro).init(self.arena.allocator());
@@ -132,8 +135,19 @@ pub const Parser = struct {
         var count: usize = 0;
         var done = false;
         while (!done) {
+            // const frame = tracy.frame(null);
+            // defer frame.end();
             count += 1;
             try log.logParser(self.*, count, "Pre-Step");
+            // no need for a token to handle consumption states
+            try self.handleConsumeState();
+            // in general, a single step processes the current token then transitions the state machine:
+            //  1. try to get a token if we don't have one
+            //  2. process the current token based on the current state
+            //      a. consumption state => process the stack
+            //      b. regular state => push things onto the stack
+            //  3. transition the state machine based on the token we just processed
+            //  4. if necessary get a new token
             try self.step();
             if (self.state_machine.state == .Decl) {
                 try log.logParser(self.*, count, "Pre-Decl Consume");
@@ -151,17 +165,193 @@ pub const Parser = struct {
     /// Process the current token based on the current state, transition to the
     /// next state, and update the current token if necessary.
     pub fn step(self: *Self) !void {
+        // doing a step without a token is nonsense so try to get one
         if (self.token == null) {
             self.token = try self.tokenizer.next();
         }
-        // comments are ignored everywhere - make sure to get the next token as well
-        if (self.token != null and self.token.?.token_type == .Comment) {
-            self.token = try self.tokenizer.next();
+        try self.skipComments();
+        if (self.token == null) {
+            try self.state_machine.transition(.None);
             return;
         }
 
-        // states where stack consumption occurs do not need a token, and in the case that we're at
-        // the end of the file, this processing still needs to be handled, so we do so now
+        // get the token slice for convenience
+        const token_slice = try self.token.?.slice(self.input);
+        var keep_token = false;
+        // process the current token based on our current state
+        switch (self.state_machine.state) {
+            .Decl => keep_token = true,
+            .Equals => {}, // handled in .ValueEnter
+            .ValueEnter => {
+                // don't add the CList for an empty array or a batch placeholder
+                if (self.token.?.token_type != .CloseSquare and self.token.?.token_type != .Question) {
+                    try self.stack.append(.{ .CList = ConcatList.init(self.arena.allocator()) });
+                }
+                keep_token = true;
+            },
+            .Value => {
+                switch (self.token.?.token_type) {
+                    .String, .RawString => try self.stack.append(.{ .CItem = .{ .String = token_slice } }),
+                    .MacroParamKey => {
+                        if (self.macro_validator) |*macro_validator| {
+                            if (macro_validator.current_param != null) {
+                                return ParseError.UseOfParameterAsDefaultValue;
+                            }
+                            if (macro_validator.param_counts.?.getPtr(token_slice)) |p| {
+                                p.* += 1; // count the usage of this parameter
+                            } else {
+                                return ParseError.InvalidParameterUse;
+                            }
+                            try self.stack.append(.{ .CItem = .{ .Parameter = token_slice } });
+                        } else {
+                            return ParseError.MacroParamKeyUsedOutsideMacroDecl;
+                        }
+                    },
+                    .Question => try self.stack.append(.Placeholder),
+                    .MacroKey, .OpenCurly, .OpenSquare, .CloseSquare => keep_token = true,
+                    else => {},
+                }
+            },
+            .ValueConcat => if (self.token.?.token_type != .Plus) {
+                keep_token = true;
+            },
+
+            // Objects
+            .ObjectBegin => {
+                try self.stack.append(.{ .CItem = .{ .Object = std.StringArrayHashMap(ConcatList).init(self.arena.allocator()) } });
+            },
+            .Key => switch (self.token.?.token_type) {
+                .String => try self.stack.append(.{ .Key = token_slice }),
+                else => keep_token = true,
+            },
+            .ConsumeObjectEntry => keep_token = true,
+            .ObjectEnd => if (self.token.?.token_type == .String) {
+                keep_token = true;
+            },
+
+            // Arrays
+            .ArrayBegin => {
+                try self.stack.append(.{ .CItem = .{ .Array = std.ArrayList(ConcatList).init(self.arena.allocator()) } });
+            },
+            .ConsumeArrayItem => keep_token = true,
+            .ArrayEnd => if (self.token.?.token_type != .CloseSquare) {
+                keep_token = true;
+            },
+
+            // Macro Declaration
+            .MacroDeclKey => {
+                if (self.macros.contains(token_slice)) {
+                    return ParseError.DuplicateMacroName;
+                }
+                try self.stack.append(.{ .Key =  token_slice });
+                self.macro_validator = MacroValidator{};
+            },
+            .MacroDeclOptionalParams => switch (self.token.?.token_type) {
+                .OpenParen => {
+                    try self.stack.append(.{ .ParamMap = std.StringArrayHashMap(?ConcatList).init(self.arena.allocator()) });
+                    self.macro_validator.?.param_counts = std.StringArrayHashMap(usize).init(self.arena.allocator());
+                },
+                else => try self.stack.append(.{ .ParamMap = null }),
+            },
+            .MacroDeclParam => switch (self.token.?.token_type) {
+                .String => {
+                    try self.stack.append(.{ .MacroDeclParam = token_slice });
+                    try self.macro_validator.?.param_counts.?.putNoClobber(token_slice, 0);
+                    self.macro_validator.?.current_param = token_slice;
+                },
+                .CloseParen => keep_token = true,
+                else => {},
+            },
+            .MacroDeclParamOptionalDefaultValue => switch (self.token.?.token_type) {
+                .String, .CloseParen => {
+                    self.macro_validator.?.current_param = null;
+                    keep_token = true;
+                },
+                else => {},
+            },
+            .ConsumeMacroDeclParam, .ConsumeMacroDeclDefaultParam => keep_token = true,
+            .MacroDeclParamsEnd => {
+                self.macro_validator.?.current_param = null;
+                if (self.token.?.token_type == .CloseParen) {
+                    if (self.macro_validator.?.param_counts.?.count() == 0) {
+                        return ParseError.EmptyMacroDeclParams;
+                    }
+                }
+            },
+
+            // Macro Expression
+            .MacroExprKey => {
+                if (!self.macros.contains(token_slice)) {
+                    return ParseError.MacroNotYetDeclared;
+                }
+                try self.stack.append(.{ .CItem = .{ .Expression = .{ .key = token_slice } } });
+            },
+            .MacroExprOptionalArgsOrAccessors, .MacroExprOptionalAccessors => {
+                if (self.token.?.token_type == .MacroAccessor) {
+                    var expr = &self.stack.items[self.stack.items.len - 1].CItem.Expression;
+                    expr.*.accessors = std.ArrayList([]const u8).init(self.arena.allocator());
+                }
+                keep_token = true;
+            },
+            .ConsumeMacroExprArgsOrBatchList => keep_token = true,
+            .MacroExprAccessors => switch (self.token.?.token_type) {
+                .MacroAccessor => {
+                    var expr = &self.stack.items[self.stack.items.len - 1].CItem.Expression;
+                    try expr.*.accessors.?.append(token_slice);
+                },
+                else => keep_token = true,
+            },
+            .MacroExprOptionalBatch => if (self.token.?.token_type != .Percent) {
+                keep_token = true;
+            },
+            .ConsumeMacroExprBatchArgsList => keep_token = true,
+
+            // Macro Expression Arguments
+            .MacroExprArgsBegin => {
+                try self.stack.append(.{ .ExprArgList = std.ArrayList(ZExprArg).init(self.arena.allocator()) });
+            },
+            .ConsumeMacroExprArg => keep_token = true,
+            .MacroExprArgsEnd => if (self.token.?.token_type != .CloseParen) {
+                keep_token = true;
+            },
+
+            // Macro Expression Batch Arguments
+            .MacroExprBatchListBegin => {
+                try self.stack.append(.{ .BSet = std.ArrayList(std.ArrayList(ConcatList)).init(self.arena.allocator()) });
+            },
+            .MacroExprBatchArgsBegin, .ConsumeMacroExprBatchArgs => keep_token = true,
+            .MacroExprBatchListEnd => if (self.token.?.token_type != .CloseSquare) {
+                keep_token = true;
+            },
+        }
+        // transition to the next state
+        try self.state_machine.transition(self.token.?.token_type);
+        // get a new token if necessary - we must do this _after_ the state machine transition
+        if (!keep_token) {
+            if (log.LOGGING) std.debug.print("getting new token...\n", .{});
+            self.token = try self.tokenizer.next();
+        }
+    }
+
+    fn consumeMacro(self: *Self) !void {
+        if (self.macro_validator) |*macro_validator| {
+            // std.debug.print("...consuming macro declaration...\n", .{});
+            defer {
+                self.macro_validator.?.deinit();
+                self.macro_validator = null;
+            }
+            try macro_validator.validate();
+            const c_list = self.stack.pop().CList;
+            const params = self.stack.pop().ParamMap;
+            const key = self.stack.pop().Key;
+            try self.macros.putNoClobber(key, .{ .parameters = params, .value = c_list });
+        } else {
+            return ParseError.NoMacroToConsume;
+        }
+    }
+
+    /// If we're in any state that requires us to pop from our stack, we'll handle it here.
+    fn handleConsumeState(self: *Self) !void {
         switch (self.state_machine.state) {
             .ValueConcat => {
                 // consume the value we just parsed
@@ -231,181 +421,60 @@ pub const Parser = struct {
             },
             else => {},
         }
+    }
 
-        // to continue on, we must have a token
+    pub fn sstep(self: *Self, alloc_: std.mem.Allocator) !?StreamType { // TODO: return a stream type
+        _ = alloc_;
         if (self.token == null) {
-            try self.state_machine.transition(.None);
-            return;
+            self.token = try self.tokenizer.next();
+        }
+        // skip any comments at the beginning of the file (if that's where we are)
+        try self.skipComments();
+
+        // parse all macros up to the next non-macro statement
+        while (self.macro_validator != null
+            or (self.state_machine.state == .Decl
+                and self.token != null and self.token.?.token_type == .MacroKey))
+        {
+            try self.step();
+            if (self.state_machine.state == .Decl) {
+                try self.consumeMacro();
+                try self.skipComments(); // skip comments here so we can keep parsing more macros if there are any
+            }
         }
 
-        // get the token slice for convenience
-        const token_slice = try self.token.?.slice(self.input);
-        var keep_token = false;
-        // process the current token based on our current state
-        switch (self.state_machine.state) {
-            .Decl => {
-                self.macro_validator = null;
-                keep_token = true;
-            },
-            .Equals => {}, // handled in .ValueEnter
-            .ValueEnter => {
-                // don't add the CList for an empty array or a batch placeholder
-                if (self.token.?.token_type != .CloseSquare and self.token.?.token_type != .Question) {
-                    try self.stack.append(.{ .CList = ConcatList.init(self.arena.allocator()) });
-                }
-                keep_token = true;
-            },
-            .Value => {
-                switch (self.token.?.token_type) {
-                    .String, .RawString => try self.stack.append(.{ .CItem = .{ .String = token_slice } }),
-                    .MacroParamKey => {
-                        if (self.macro_validator) |*macro_validator| {
-                            if (macro_validator.current_param != null) {
-                                return ParseError.UseOfParameterAsDefaultValue;
-                            }
-                            if (macro_validator.param_counts.?.getPtr(token_slice)) |p| {
-                                p.* += 1; // count the usage of this parameter
-                            } else {
-                                return ParseError.InvalidParameterUse;
-                            }
-                            try self.stack.append(.{ .CItem = .{ .Parameter = token_slice } });
-                        } else {
-                            return ParseError.MacroParamKeyUsedOutsideMacroDecl;
-                        }
-                    },
-                    .Question => try self.stack.append(.Placeholder),
-                    .MacroKey, .OpenCurly, .OpenSquare, .CloseSquare => keep_token = true,
-                    else => {},
-                }
-            },
-            .ValueConcat => if (self.token.?.token_type != .Plus) {
-                keep_token = true;
-            },
+        // States we're looking for:
+        // - Key: If we're in the Key state then return ArrayList(u8) for the current
+        //        token, transition to the next state, and get a new token
+        // - ObjectBegin, ObjectEnd, ArrayBegin, ArrayEnd: Return the corresponding
+        //                type, transition to the next state, and get a new token
+        // - Value: Check the token type:
+        //          - If the token is a String or RawString, allocate memory for
+        //            it then transition the state machine and get the next token
+        //            but do not return yet
+        //          - If the token is an OpenCurly or OpenSquare and the previous
+        //            token was a Plus, then ignore this
+        //          - If the token is a MacroKey then use the regular step() function
+        //            parse and evaluate the macro expression
 
-            // Objects
-            .ObjectBegin => {
-                try self.stack.append(.{ .CItem = .{ .Object = std.StringArrayHashMap(ConcatList).init(self.arena.allocator()) } });
-            },
-            .Key => switch (self.token.?.token_type) {
-                .String => try self.stack.append(.{ .Key = token_slice }),
-                else => keep_token = true,
-            },
-            .ConsumeObjectEntry => keep_token = true,
-            .ObjectEnd => if (self.token.?.token_type == .String) {
-                keep_token = true;
-            },
 
-            // Arrays
-            .ArrayBegin => {
-                try self.stack.append(.{ .CItem = .{ .Array = std.ArrayList(ConcatList).init(self.arena.allocator()) } });
-            },
-            .ConsumeArrayItem => {
-                keep_token = true;
-            },
-            .ArrayEnd => if (self.token.?.token_type != .CloseSquare) {
-                keep_token = true;
-            },
 
-            // Macro Declaration
-            .MacroDeclKey => {
-                if (self.macros.contains(token_slice)) {
-                    return ParseError.DuplicateMacroName;
-                }
-                try self.stack.append(.{ .Key =  token_slice });
-                self.macro_validator = MacroValidator{};
-            },
-            .MacroDeclOptionalParams => switch (self.token.?.token_type) {
-                .OpenParen => {
-                    try self.stack.append(.{ .ParamMap = std.StringArrayHashMap(?ConcatList).init(self.arena.allocator()) });
-                    self.macro_validator.?.param_counts = std.StringArrayHashMap(usize).init(self.arena.allocator());
-                },
-                else => try self.stack.append(.{ .ParamMap = null }),
-            },
-            .MacroDeclParam => switch (self.token.?.token_type) {
-                .String => {
-                    try self.stack.append(.{ .MacroDeclParam = token_slice });
-                    try self.macro_validator.?.param_counts.?.putNoClobber(token_slice, 0);
-                    self.macro_validator.?.current_param = token_slice;
-                },
-                .CloseParen => keep_token = true,
-                else => {},
-            },
-            .MacroDeclParamOptionalDefaultValue => switch (self.token.?.token_type) {
-                .String, .CloseParen => {
-                    self.macro_validator.?.current_param = null;
-                    keep_token = true;
-                },
-                else => {},
-            },
-            .ConsumeMacroDeclParam, .ConsumeMacroDeclDefaultParam => keep_token = true,
-            .MacroDeclParamsEnd => {
-                self.macro_validator.?.current_param = null;
-                if (self.token.?.token_type == .CloseParen) {
-                    if (self.macro_validator.?.param_counts.?.count() == 0) {
-                        return ParseError.EmptyMacroDeclParams;
-                    }
-                }
-            },
+        // transition the streaming state machine
+        // return the type corresponding to the current token
+        // TODO: how should we handle concatenated values?
+        //      - objects: need a look-ahead to skip the closing curly, plus sign, and possible next opening curly
+        //      - arrays: need a look-ahead to skip the closing square, plus sign, and possible next opening square
+        //      - strings: need a look-ahead to skip the plus sign and continue the string - also requires allocation
+        // TODO: how should we handle macro expressions?
+        //      - check the type of the evaluated expression and ...
+        //          - object: iterate through the parts and return them one-by-one - requires temporary allocation
+        //              or step-wise expression evaluation (which I don't have yet)
 
-            // Macro Expression
-            .MacroExprKey => {
-                if (!self.macros.contains(token_slice)) {
-                    return ParseError.MacroNotYetDeclared;
-                }
-                try self.stack.append(.{ .CItem = .{ .Expression = .{ .key = token_slice } } });
-            },
-            .MacroExprOptionalArgsOrAccessors, .MacroExprOptionalAccessors => {
-                if (self.token.?.token_type == .MacroAccessor) {
-                    var expr = &self.stack.items[self.stack.items.len - 1].CItem.Expression;
-                    expr.*.accessors = std.ArrayList([]const u8).init(self.arena.allocator());
-                }
-                keep_token = true;
-            },
-            .ConsumeMacroExprArgsOrBatchList => {
-                keep_token = true;
-            },
-            .MacroExprAccessors => switch (self.token.?.token_type) {
-                .MacroAccessor => {
-                    var expr = &self.stack.items[self.stack.items.len - 1].CItem.Expression;
-                    try expr.*.accessors.?.append(token_slice);
-                },
-                else => keep_token = true,
-            },
-            .MacroExprOptionalBatch => if (self.token.?.token_type != .Percent) {
-                keep_token = true;
-            },
-            .ConsumeMacroExprBatchArgsList => {
-                keep_token = true;
-            },
+        return null;
+    }
 
-            // Macro Expression Arguments
-            .MacroExprArgsBegin => {
-                try self.stack.append(.{ .ExprArgList = std.ArrayList(ZExprArg).init(self.arena.allocator()) });
-            },
-            .ConsumeMacroExprArg => {
-                keep_token = true;
-            },
-            .MacroExprArgsEnd => if (self.token.?.token_type != .CloseParen) {
-                keep_token = true;
-            },
-
-            // Macro Expression Batch Arguments
-            .MacroExprBatchListBegin => {
-                try self.stack.append(.{ .BSet = std.ArrayList(std.ArrayList(ConcatList)).init(self.arena.allocator()) });
-            },
-            .MacroExprBatchArgsBegin => keep_token = true,
-            .ConsumeMacroExprBatchArgs => {
-                keep_token = true;
-            },
-            .MacroExprBatchListEnd => if (self.token.?.token_type != .CloseSquare) {
-                keep_token = true;
-            },
-        }
-        // transition to the next state
-        try self.state_machine.transition(self.token.?.token_type);
-        // get a new token if necessary - we must do this _after_ the state machine transition
-        if (!keep_token) {
-            if (log.LOGGING) std.debug.print("getting new token...\n", .{});
+    fn skipComments(self: *Self) !void {
+        while (self.token != null and self.token.?.token_type == .Comment) {
             self.token = try self.tokenizer.next();
         }
     }
@@ -897,3 +966,22 @@ test "macro batching with default parameter" {
         try doZValueStringTest(expected, foreground);
     }
 }
+
+// test "basic streaming API test" {
+//     const input =
+//         \\key = [
+//         \\    hello
+//         \\    {
+//         \\        cool = beans
+//         \\        never = [ 300 400 12 ]
+//         \\    }
+//         \\]
+//         \\
+//         ;
+//     var parser = Parser.init(input, testing.allocator);
+//     defer parser.deinit();
+
+//     const key = (try parser.sstep(testing.allocator)).?;
+//     try testing.expect(key == .Key);
+//     try testing.expectEqualStrings("key", key.Key);
+// }

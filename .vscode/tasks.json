@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+        {
+            "label": "build parsetest",
+            "type": "shell",
+            "command": "zig test src/parse.zig -femit-bin=./parsetest",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

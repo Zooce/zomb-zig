@@ -81,6 +81,7 @@ pub const StateMachine = struct {
     const Self = @This();
 
     state: State = .Decl,
+    // TODO: add a "consume" flag to know (without switching on the state) - this should be useful for the streaming API since it does'nt care about these states
 
     // NOTE: the following bit-stack setup is based on zig/lib/std/json.zig
     stack: StackWidth = 0,

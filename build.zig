@@ -5,11 +5,11 @@ pub fn build(b: *bld.Builder) void {
 
     // build the library
     const zomb_lib = b.addStaticLibrary("zomb", "src/zomb.zig");
-    zomb_lib.setBuildMode(b.standardReleaseOptions());
+    zomb_lib.setBuildMode(mode);
     zomb_lib.install();
 
     // build the tests
-    const test_step = b.step("test", "Run ZOMB-Zig library tests");
+    const test_step = b.step("alltests", "Run ZOMB-Zig library tests");
     var t = b.addTest("src/zomb.zig");
     t.setBuildMode(mode);
     test_step.dependOn(&t.step);
@@ -26,7 +26,7 @@ pub fn build(b: *bld.Builder) void {
         run_cmd.addArgs(args);
     }
 
-    // Create a `run` step (so we can do `zig build run`)
+    // Create an `example` run step (so we can do `zig build example`)
     const run_step = b.step("example", "Run the example app");
     run_step.dependOn(&run_cmd.step);
 }

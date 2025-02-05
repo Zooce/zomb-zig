@@ -22,5 +22,6 @@ test {
     _ = @import("token.zig");
     _ = @import("parse.zig");
     _ = @import("data.zig");
+    _ = @import("sdata.zig");
     _ = @import("state_machine.zig");
 }

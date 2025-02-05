@@ -5,12 +5,15 @@
 //! Run this from zomb-zig/ using the command `zig build example`
 
 const std = @import("std");
+// const tracy = @import("tracy");
 const json = std.json;
 
 const zomb = @import("zomb");
 
 
 pub fn main() anyerror!void {
+    // const t = tracy.trace(@src(), null);
+    // defer t.end();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var input_file_contents = std.ArrayList(u8).init(gpa.allocator());
     defer input_file_contents.deinit();

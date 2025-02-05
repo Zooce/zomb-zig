@@ -153,6 +153,7 @@ pub const Tokenizer = struct {
     state: State = State.None,
     state_stage: u8 = 0,
     crlf: bool = false,
+    skip_comments: bool = true,
 
     /// The input buffer
     buffer: []const u8 = undefined,
@@ -167,8 +168,9 @@ pub const Tokenizer = struct {
     /// The token currently being discovered
     token: Token = Token{},
 
-    pub fn init(buffer_: []const u8) Self {
+    pub fn init(buffer_: []const u8, skip_comments_: bool) Self {
         return Self{
+            .skip_comments = skip_comments_,
             .buffer = buffer_,
         };
     }
@@ -318,7 +320,7 @@ pub const Tokenizer = struct {
                             return self.token;
                         },
                         else => { // reverse the consumption of the percent delimiter
-                            self.token.size -= 1;
+                            self.unconsume();
                             self.state_stage = 2;
                         },
                     },
@@ -432,8 +434,11 @@ pub const Tokenizer = struct {
                         }
                     },
                     2 => if (self.consumeToBytes("\r\n") != null) {
-                        self.tokenComplete();
-                        return self.token;
+                        if (!self.skip_comments) {
+                            self.tokenComplete();
+                            return self.token;
+                        }
+                        // TODO: what do we do if we want to skip comments?
                     },
                     else => return TokenError.UnexpectedBareStringOrCommentStage,
                 },
@@ -478,6 +483,14 @@ pub const Tokenizer = struct {
             return byte;
         }
         return null;
+    }
+
+    /// Reduce the size of the current token by 1 byte but keep our buffer cursor at the same
+    /// location. This is useful when the next byte indicates that the previous one was only a
+    /// delimiter (e.g., the .Percent delimiter is the special case here `%` is a token by itself
+    /// but `%param` is a different token).
+    fn unconsume(self: *Self) void {
+        self.token.size -= 1;
     }
 
     /// Consume all bytes until one of the target bytes is found, and return that target byte. If
@@ -615,7 +628,7 @@ fn expectToken(expected_token_: ExpectedToken, token_: Token, orig_str_: []const
 }
 
 fn doTokenTest(str_: []const u8, expected_tokens_: []const ExpectedToken) !void {
-    var tokenizer = Tokenizer.init(str_);
+    var tokenizer = Tokenizer.init(str_, false);
     for (expected_tokens_) |expected_token, i| {
         const actual_token = (try tokenizer.next()) orelse return TokenTestError.NullToken;
         errdefer {
