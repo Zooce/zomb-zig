@@ -141,6 +141,10 @@ pub const Parser = struct {
             try log.logParser(self.*, count, "Pre-Step");
             // no need for a token to handle consumption states
             try self.handleConsumeState();
+            // get a token if we don't have one and skip comment tokens
+            if (self.token == null) {
+                self.token = try self.tokenizer.next();
+            }
             // in general, a single step processes the current token then transitions the state machine:
             //  1. try to get a token if we don't have one
             //  2. process the current token based on the current state
@@ -165,11 +169,9 @@ pub const Parser = struct {
     /// Process the current token based on the current state, transition to the
     /// next state, and update the current token if necessary.
     pub fn step(self: *Self) !void {
-        // doing a step without a token is nonsense so try to get one
-        if (self.token == null) {
-            self.token = try self.tokenizer.next();
-        }
         try self.skipComments();
+
+        // to continue on, we must have a token
         if (self.token == null) {
             try self.state_machine.transition(.None);
             return;
